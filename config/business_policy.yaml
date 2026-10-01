@@ -1,0 +1,145 @@
+version: "2026-1"
+active_profile: "HACKATHON_DEMO" # Toggle to "PRODUCTION" for live enterprise deployment
+
+profiles:
+  HACKATHON_DEMO:
+    description: "Calibrated for small testnet faucet balances ($10 - $50 USDC) with rapid execution"
+    operating_accounts:
+      - account_id: "acc_engineering"
+        name: "Engineering Operations"
+        role: "OPEX_DEV"
+        min_floor_usdc: 1.00
+        safety_multiplier: 1.05
+        evaluation_window_days: 3
+        authorized_categories:
+          - "INFRASTRUCTURE"
+          - "DEVELOPER_TOOLS"
+          - "SAAS"
+        max_autonomous_sweep_limit: 50.00
+        exclude_from_waterfall_draws: false
+
+      - account_id: "acc_payroll"
+        name: "Corporate Payroll Escrow"
+        role: "PAYROLL"
+        min_floor_usdc: 5.00
+        safety_multiplier: 1.10
+        evaluation_window_days: 3
+        authorized_categories:
+          - "SALARIES"
+          - "CONTRACTOR_COMPENSATION"
+        max_autonomous_sweep_limit: 0.00
+        exclude_from_waterfall_draws: true # Strict safety lock: payroll cannot be drained by waterfall
+
+      - account_id: "acc_general_treasury"
+        name: "General Treasury Reserve"
+        role: "TREASURY_RESERVE"
+        min_floor_usdc: 2.00
+        safety_multiplier: 1.05
+        evaluation_window_days: 3
+        authorized_categories:
+          - "GENERAL_OPERATIONS"
+          - "INTERCOMPANY_TRANSFER"
+        max_autonomous_sweep_limit: 100.00
+        exclude_from_waterfall_draws: false
+
+      - account_id: "acc_marketing"
+        name: "Marketing & Growth"
+        role: "OPEX_GROWTH"
+        min_floor_usdc: 1.00
+        safety_multiplier: 1.05
+        evaluation_window_days: 3
+        authorized_categories:
+          - "MARKETING"
+          - "ADVERTISING"
+          - "SUBSCRIPTION"
+        max_autonomous_sweep_limit: 50.00
+        exclude_from_waterfall_draws: false
+
+    investment_rules:
+      target_vault: "0x0000000000000000000000000000000000000000" # CentralTreasuryYieldVault address
+      max_company_allocation_ratio: 0.90 # Max 90% allocation into USYC
+      min_sweep_amount_usdc: 0.50 # $0.50 floor for micro-sweeps on testnet
+      auto_sweep_enabled: true
+      auto_recall_enabled: true
+      invest_hysteresis_band_usdc: 0.50 # Invest only if SafeToInvest >= TargetReserve + $0.50
+      recall_hysteresis_band_usdc: 0.25 # Recall only if Balance < TargetReserve - $0.25
+      debounce_window_ms: 5000 # 5-second debounce window
+      min_action_cooldown_seconds: 30 # 30-second cooldown between sweeps
+      tag_internal_settlement_events: true # Filter internal transfers to stop loop cascades
+      redemption_lead_time_seconds: 300 # 5 minutes for demo mock execution
+      redemption_latency_tier: "TIER_A_INSTANT"
+
+    spending_limits:
+      daily_hard_cap_usdc: 100.00
+      single_tx_human_gate_threshold_usdc: 10.00
+
+  PRODUCTION:
+    description: "Enterprise scale with multi-day buffers and rigorous risk controls"
+    operating_accounts:
+      - account_id: "acc_engineering"
+        name: "Engineering Operations"
+        role: "OPEX_DEV"
+        min_floor_usdc: 500.00
+        safety_multiplier: 1.20
+        evaluation_window_days: 30
+        authorized_categories:
+          - "INFRASTRUCTURE"
+          - "DEVELOPER_TOOLS"
+          - "SAAS"
+        max_autonomous_sweep_limit: 50000.00
+        exclude_from_waterfall_draws: false
+
+      - account_id: "acc_payroll"
+        name: "Corporate Payroll Escrow"
+        role: "PAYROLL"
+        min_floor_usdc: 10000.00
+        safety_multiplier: 1.50
+        evaluation_window_days: 30
+        authorized_categories:
+          - "SALARIES"
+          - "CONTRACTOR_COMPENSATION"
+        max_autonomous_sweep_limit: 0.00
+        exclude_from_waterfall_draws: true
+
+      - account_id: "acc_general_treasury"
+        name: "General Treasury Reserve"
+        role: "TREASURY_RESERVE"
+        min_floor_usdc: 25000.00
+        safety_multiplier: 1.20
+        evaluation_window_days: 30
+        authorized_categories:
+          - "GENERAL_OPERATIONS"
+          - "INTERCOMPANY_TRANSFER"
+        max_autonomous_sweep_limit: 250000.00
+        exclude_from_waterfall_draws: false
+
+      - account_id: "acc_marketing"
+        name: "Marketing & Growth"
+        role: "OPEX_GROWTH"
+        min_floor_usdc: 2000.00
+        safety_multiplier: 1.20
+        evaluation_window_days: 30
+        authorized_categories:
+          - "MARKETING"
+          - "ADVERTISING"
+          - "SUBSCRIPTION"
+        max_autonomous_sweep_limit: 20000.00
+        exclude_from_waterfall_draws: false
+
+    investment_rules:
+      target_vault: "0x0000000000000000000000000000000000000000" # Production Hashnote USYC Vault
+      max_company_allocation_ratio: 0.85 # Max 85% in USYC, maintaining 15% liquid buffer
+      min_sweep_amount_usdc: 100.00
+      auto_sweep_enabled: true
+      auto_recall_enabled: true
+      invest_hysteresis_band_usdc: 250.00
+      recall_hysteresis_band_usdc: 100.00
+      debounce_window_ms: 10000
+      min_action_cooldown_seconds: 60
+      tag_internal_settlement_events: true
+      redemption_lead_time_seconds: 86400 # 24 hours standard T+0/T+1 queue
+      redemption_latency_tier: "TIER_C_BATCH_T1"
+
+    spending_limits:
+      daily_hard_cap_usdc: 25000.00
+      single_tx_human_gate_threshold_usdc: 5000.00

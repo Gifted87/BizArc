@@ -1,0 +1,34 @@
+{
+  "networks": {
+    "arcMainnet": {
+      "name": "Arc Mainnet",
+      "chainId": 5042,
+      "rpcUrl": "https://rpc.mainnet.arc.io",
+      "wsUrl": "wss://rpc.mainnet.arc.io",
+      "explorerUrl": "https://explorer.arc.io",
+      "usdcPredeploy": "0x3600000000000000000000000000000000000000",
+      "systemEmitter": "0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE",
+      "multicall3From": "0xca11bde05977b3631167028862be2a173976ca11",
+      "cctpDomain": 26,
+      "minGasFloorGwei": 20,
+      "nativeDecimals": 18,
+      "erc20Decimals": 6
+    },
+    "arcTestnet": {
+      "name": "Arc Testnet",
+      "chainId": 5042002,
+      "rpcUrl": "https://rpc.testnet.arc.io",
+      "wsUrl": "wss://rpc.testnet.arc.io",
+      "explorerUrl": "https://explorer.testnet.arc.io",
+      "faucetUrl": "https://faucet.circle.com",
+      "usdcPredeploy": "0x3600000000000000000000000000000000000000",
+      "systemEmitter": "0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE",
+      "multicall3From": "0xca11bde05977b3631167028862be2a173976ca11",
+      "cctpDomain": 26,
+      "minGasFloorGwei": 20,
+      "nativeDecimals": 18,
+      "erc20Decimals": 6
+    }
+  },
+  "defaultNetwork": "arcTestnet"
+}
