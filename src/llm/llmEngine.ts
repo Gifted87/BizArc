@@ -29,9 +29,19 @@ export class UniversalOpenAiCompatibleEngine implements ILlmEngine {
   private defaultMaxTokens: number;
 
   constructor(config: LlmEngineConfig) {
-    this.apiKey = config.apiKey || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "";
-    this.baseUrl = (config.baseUrl || process.env.LLM_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
-    this.model = config.model || process.env.LLM_MODEL || "gpt-4o";
+    this.apiKey =
+      config.apiKey ||
+      process.env.OPENROUTER_API_KEY ||
+      process.env.LLM_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      "";
+    this.baseUrl = (
+      config.baseUrl ||
+      process.env.OPENROUTER_BASE_URL ||
+      process.env.LLM_BASE_URL ||
+      "https://openrouter.ai/api/v1"
+    ).replace(/\/$/, "");
+    this.model = config.model || process.env.LLM_MODEL || "cohere/north-mini-code:free";
     this.embeddingModel = config.embeddingModel || process.env.LLM_EMBEDDING_MODEL || "text-embedding-3-small";
     this.defaultTemperature = config.temperature ?? 0.1;
     this.defaultMaxTokens = config.maxTokens ?? 2048;
@@ -64,6 +74,8 @@ export class UniversalOpenAiCompatibleEngine implements ILlmEngine {
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      "HTTP-Referer": process.env.LLM_HTTP_REFERER || "https://bizarc.io",
+      "X-Title": process.env.LLM_TITLE || "BizArc Autonomous Treasury Swarm",
     };
     if (this.apiKey) {
       headers["Authorization"] = `Bearer ${this.apiKey}`;
@@ -87,7 +99,7 @@ export class UniversalOpenAiCompatibleEngine implements ILlmEngine {
     }
 
     return {
-      content: choice.message?.content || null,
+      content: choice.message?.content || choice.message?.reasoning || null,
       tool_calls: choice.message?.tool_calls || undefined,
       finish_reason: choice.finish_reason || "stop",
       usage: json.usage
