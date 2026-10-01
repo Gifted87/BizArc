@@ -4,17 +4,21 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "compile": "tsx scripts/compileContracts.ts",
+    "build": "tsx scripts/compileContracts.ts && tsc",
     "test:d1": "tsx tests/d1_environment.test.ts",
     "test:d2": "tsx tests/d2_foundation.test.ts",
-    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts"
+    "test:d3": "tsx tests/d3_contracts.test.ts",
+    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts && tsx tests/d3_contracts.test.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "devDependencies": {
+    "@openzeppelin/contracts": "^5.6.1",
     "@types/node": "^26.6.3",
+    "solc": "^0.8.37",
     "ts-node": "^10.9.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"

@@ -4,6 +4,7 @@ export * from "./types/sprs.js";
 export * from "./types/agents.js";
 export * from "./config/policyLoader.js";
 export * from "./foundation/index.js";
+export * from "./contracts/index.js";
 
 // Convenience bootstrap function
 import { PolicyLoader } from "./config/policyLoader.js";
