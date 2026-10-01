@@ -47,6 +47,7 @@ Your primary mandate is Chief Risk & Governance Gatekeeper:
    - DENY: Hard invariant violated (e.g. payroll draw, unverified address). Instant halt.
    - ESCALATE_TO_SPRS: Sound commercial rationale outside standard bounds, or policy ambiguity. Generate EIP-712 Standardized Permission Request.`,
       allowedTools: [
+        "evaluate_reason_bearing_intent",
         "query_vector_memory",
         "read_dynamic_records",
         "check_vendor_master",
@@ -141,4 +142,18 @@ Your primary mandate is Chief Risk & Governance Gatekeeper:
       reason: `Amount (${intent.amountUsdc} USDC) exceeds autonomous spending cap (${perTxCap} USDC). Escalated to human CFO via EIP-712 SPRS. Rationale submitted by agent: "${intent.declaredReason}"`,
     };
   }
+
+  /**
+   * Autonomous LLM Evaluation of Reason-Bearing Intent.
+   * Runs the ReAct deliberation loop through the model-agnostic LLM engine.
+   */
+  public async evaluateReasonBearingIntentTask(
+    sessionId: string,
+    intent: ReasonBearingIntentPayload
+  ) {
+    const task = `Evaluate proposed reason-bearing intent: Action ${intent.proposedAction} for amount ${intent.amountUsdc} USDC on account ${intent.accountId} with payout address ${intent.recipientAddress || "none"}. Declared reason: "${intent.declaredReason}". Check Tier A mathematical bounds and Tier B declared policies. Issue PERMIT, DENY, or ESCALATE_TO_SPRS.`;
+    return this.executeTask(sessionId, task, intent);
+  }
 }
+
+export { PolicyComplianceLlmAgent as PolicyComplianceAgent };

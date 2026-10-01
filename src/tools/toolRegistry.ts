@@ -427,18 +427,13 @@ export class ToolRegistry {
 
         case "plan_waterfall_allocation": {
           const candidatePlan = await this.accountIntelligence.getWaterfallCandidateAccounts(
-            args.requiredAmountUsdc
+            args.requiredAmountUsdc,
+            args.balanceOverrides
           );
 
           return {
             success: true,
-            data: {
-              totalAvailableUsdc: candidatePlan.totalAvailableUsdc,
-              isFullyFundable: candidatePlan.isFullyFundable,
-              allocationPlan: candidatePlan.allocationPlan,
-              eligibleAccountsCount: candidatePlan.eligibleAccounts.length,
-              shortfallUsdc: candidatePlan.shortfallUsdc,
-            },
+            data: candidatePlan,
           };
         }
 

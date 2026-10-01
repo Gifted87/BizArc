@@ -25,4 +25,17 @@ Your primary mandate is liquidity orchestration and capital efficiency:
       ...deps,
     });
   }
+
+  /**
+   * Autonomous LLM Liquidity Evaluation & Surplus Sweeping.
+   * Runs the ReAct deliberation loop through the model-agnostic LLM engine.
+   */
+  public async evaluateLiquidityAndSweep(sessionId: string, accountId: string, customAmount?: string) {
+    const task = customAmount
+      ? `Assess Parallel Tripartite Balance and Dynamic Safe-to-Invest for account ${accountId}. Execute autonomous sweep of ${customAmount} USDC into USYC Yield Vault on Arc L1.`
+      : `Assess Parallel Tripartite Balance and calculate Dynamic Safe-to-Invest for account ${accountId}. If Safe-to-Invest indicates surplus capital, execute autonomous sweep to USYC Yield Vault on Arc L1.`;
+    return this.executeTask(sessionId, task, { accountId, customAmount });
+  }
 }
+
+export { TreasurySentinelLlmAgent as TreasurySentinelAgent };

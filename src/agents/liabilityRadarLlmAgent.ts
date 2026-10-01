@@ -24,4 +24,25 @@ Your primary mandate is Golden Rule 2 & Golden Rule 3:
       ...deps,
     });
   }
+
+  /**
+   * Autonomous LLM Ingestion & Forensic Verification of an incoming Invoice.
+   * Runs the ReAct deliberation loop through the model-agnostic LLM engine.
+   */
+  public async ingestAndVerifyInvoice(
+    sessionId: string,
+    invoice: {
+      accountId: string;
+      vendorId: string;
+      invoiceId: string;
+      amountUsdc: string;
+      claimedPayoutAddress: string;
+      poReference: string;
+    }
+  ) {
+    const task = `Perform forensic verification and 3-way match on incoming invoice ${invoice.invoiceId} from vendor ${invoice.vendorId} for ${invoice.amountUsdc} USDC on PO ${invoice.poReference} with claimed payout address ${invoice.claimedPayoutAddress}. Verify payee substitution against Vendor Master. If valid, update Dynamic Record 1 for account ${invoice.accountId}. If payee substitution or price mismatch is detected, reject and alert compliance.`;
+    return this.executeTask(sessionId, task, invoice);
+  }
 }
+
+export { LiabilityRadarLlmAgent as LiabilityRadarAgent };

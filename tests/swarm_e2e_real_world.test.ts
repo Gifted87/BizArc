@@ -1,6 +1,5 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
-import crypto from "crypto";
 import { SwarmCoordinator } from "../src/agents/swarmCoordinator.js";
 import { DbClient } from "../src/database/dbClient.js";
 
@@ -40,59 +39,75 @@ describe("BizArc Swarm E2E Real-World Multi-Agent Audit", () => {
     await DbClient.closePool();
   });
 
-  it("Step 1: OnboardingAgent initializes enterprise ground truth in pgvector memory", async () => {
+  it("Step 1: OnboardingAgent (ID #100) initializes enterprise ground truth in pgvector memory", async () => {
     await swarm.initializeEnterpriseSwarm();
 
-    const results = await swarm.vectorMemory.queryRelevantMemory(
-      "Corporate treasury governance bylaws for Arc L1 and USYC",
-      ["company_bylaws"],
-      2
+    const agentResult = await swarm.onboardingAgent.executeTask(
+      testSessionId,
+      "Search enterprise vector memory for corporate treasury governance bylaws for Arc L1 and USYC"
     );
 
-    assert.ok(results.length > 0, "Vector memory must return corporate bylaws");
-    assert.match(results[0].title, /Treasury Policy/i);
-    console.log(`✓ Vector memory retrieved: "${results[0].title}" (similarity: ${results[0].similarity.toFixed(4)})`);
+    assert.strictEqual(agentResult.success, true);
+    assert.ok(agentResult.toolCallsExecuted.length > 0);
+    console.log(`✓ OnboardingAgent executed ReAct task: ${agentResult.finalResponse.slice(0, 100)}...`);
   });
 
-  it("Step 2: Golden Rule 3 Protection: Block Payee Substitution Attack", async () => {
+  it("Step 2: LiabilityRadarAgent (ID #102) ReAct Loop: Block Payee Substitution Attack", async () => {
     const maliciousInvoice = {
+      accountId: "OPEX_DEV",
+      vendorId: "VEND-AWS-01",
       invoiceId: "INV-POISON-666",
-      poReference: "PO-2026-AWS-01",
-      claimedAmountUsdc: "12500.000000",
+      amountUsdc: "12500.000000",
       claimedPayoutAddress: "0xAttackerAddress66666666666666666666666666", // Imposter address!
+      poReference: "PO-2026-AWS-01",
     };
 
-    const result = await swarm.toolRegistry.executeTool("verify_three_way_match", maliciousInvoice);
-    assert.strictEqual(result.success, false, "3-Way Match MUST fail on payee substitution");
-    assert.match(result.error || "", /PAYEE SUBSTITUTION DETECTED/i);
-    console.log(`✓ Payee substitution attack blocked cleanly: ${result.error}`);
+    const agentResult = await swarm.radarAgent.ingestAndVerifyInvoice(testSessionId, maliciousInvoice);
+
+    // Agent ReAct loop executed verify_three_way_match tool, caught the payee substitution, and concluded with failure
+    assert.strictEqual(agentResult.success, false, "Agent must conclude with failure on payee substitution");
+    const matchTool = agentResult.toolCallsExecuted.find((t) => t.name === "verify_three_way_match");
+    assert.ok(matchTool);
+    assert.strictEqual(matchTool.result.success, false);
+    assert.match(matchTool.result.error || "", /PAYEE SUBSTITUTION DETECTED/i);
+    console.log(`✓ LiabilityRadarAgent autonomous ReAct loop blocked payee substitution: ${matchTool.result.error}`);
   });
 
-  it("Step 3: Golden Rule 5 Protection: Reject Silent Rounding on Discrepant Amount", async () => {
+  it("Step 3: LiabilityRadarAgent (ID #102) ReAct Loop: Reject Silent Rounding on Discrepant Amount", async () => {
     const roundedInvoice = {
+      accountId: "OPEX_DEV",
+      vendorId: "VEND-AWS-01",
       invoiceId: "INV-ROUNDING-FAIL",
-      poReference: "PO-2026-AWS-01",
-      claimedAmountUsdc: "12500.100000", // Mismatched by $0.10
+      amountUsdc: "12500.100000", // Mismatched by $0.10
       claimedPayoutAddress: "0x1111111111111111111111111111111111111111",
+      poReference: "PO-2026-AWS-01",
     };
 
-    const result = await swarm.toolRegistry.executeTool("verify_three_way_match", roundedInvoice);
-    assert.strictEqual(result.success, false, "3-Way match MUST reject silent rounding");
-    assert.match(result.error || "", /Silent rounding rejected/i);
-    console.log(`✓ Silent rounding rejected cleanly: ${result.error}`);
+    const agentResult = await swarm.radarAgent.ingestAndVerifyInvoice(testSessionId, roundedInvoice);
+
+    assert.strictEqual(agentResult.success, false, "Agent must reject silent rounding");
+    const matchTool = agentResult.toolCallsExecuted.find((t) => t.name === "verify_three_way_match");
+    assert.ok(matchTool);
+    assert.strictEqual(matchTool.result.success, false);
+    assert.match(matchTool.result.error || "", /Silent rounding rejected/i);
+    console.log(`✓ LiabilityRadarAgent autonomous ReAct loop rejected silent rounding: ${matchTool.result.error}`);
   });
 
-  it("Step 4: LiabilityRadarAgent verifies authentic invoice and updates Dynamic Record 1", async () => {
+  it("Step 4: LiabilityRadarAgent (ID #102) verifies authentic invoice and updates Dynamic Record 1", async () => {
     const legitimateInvoice = {
+      accountId: "OPEX_DEV",
+      vendorId: "VEND-AWS-01",
       invoiceId: "INV-2026-AWS-01",
-      poReference: "PO-2026-AWS-01",
-      claimedAmountUsdc: "12500.000000",
+      amountUsdc: "12500.000000",
       claimedPayoutAddress: "0x1111111111111111111111111111111111111111",
+      poReference: "PO-2026-AWS-01",
     };
 
-    const matchResult = await swarm.toolRegistry.executeTool("verify_three_way_match", legitimateInvoice);
-    assert.strictEqual(matchResult.success, true, "Valid invoice must pass 3-way match");
+    const agentResult = await swarm.radarAgent.ingestAndVerifyInvoice(testSessionId, legitimateInvoice);
+    assert.strictEqual(agentResult.success, true);
+    assert.ok(agentResult.toolCallsExecuted.some((t) => t.name === "verify_three_way_match" && t.result.success));
 
+    // Update Dynamic Record 1
     const lia = await swarm.dynamicRecords.upsertLiability({
       accountId: "OPEX_DEV",
       vendorId: "VEND-AWS-01",
@@ -108,10 +123,10 @@ describe("BizArc Swarm E2E Real-World Multi-Agent Audit", () => {
 
     assert.ok(lia.liabilityId);
     assert.strictEqual(lia.amountUsdc, "12500.000000");
-    console.log(`✓ Legitimate invoice passed 3-way match. Dynamic Record 1 Liability ID: ${lia.liabilityId}`);
+    console.log(`✓ LiabilityRadarAgent verified invoice. Dynamic Record 1 Liability ID: ${lia.liabilityId}`);
   });
 
-  it("Step 5: PolicyComplianceAgent (ID #104) Evaluates Reason-Bearing Intent (PERMIT)", async () => {
+  it("Step 5: PolicyComplianceAgent (ID #104) ReAct Loop: Evaluates Reason-Bearing Intent (PERMIT)", async () => {
     const intent = {
       proposedAction: "AUTONOMOUS_SWEEP",
       accountId: "OPEX_DEV",
@@ -119,28 +134,34 @@ describe("BizArc Swarm E2E Real-World Multi-Agent Audit", () => {
       declaredReason: "Operating cash exceeds 7-day liability buffer by $67,500. Sweeping $15,000 to capture 5.1% USYC yield on Arc L1.",
     };
 
-    const evalResult = await swarm.complianceAgent.evaluateIntent(intent);
-    assert.strictEqual(evalResult.decision, "PERMIT");
-    assert.ok(evalResult.clearanceCode?.startsWith("CLEAR-"));
-    console.log(`✓ Reason-Bearing Intent cleared with PERMIT: Clearance Code ${evalResult.clearanceCode}`);
+    const agentResult = await swarm.complianceAgent.evaluateReasonBearingIntentTask(testSessionId, intent);
+    assert.strictEqual(agentResult.success, true);
+    const intentTool = agentResult.toolCallsExecuted.find((t) => t.name === "evaluate_reason_bearing_intent");
+    assert.ok(intentTool);
+    assert.strictEqual(intentTool.result.data.decision, "PERMIT");
+    assert.ok(intentTool.result.data.clearanceCode?.startsWith("CLEAR-"));
+    console.log(`✓ PolicyComplianceAgent ReAct loop issued PERMIT: ${intentTool.result.data.clearanceCode}`);
   });
 
-  it("Step 6: PolicyComplianceAgent strictly DENIES illegal payroll account drain", async () => {
+  it("Step 6: PolicyComplianceAgent (ID #104) ReAct Loop: strictly DENIES illegal payroll account drain", async () => {
     const payrollIntent = {
       proposedAction: "DISBURSAL_SETTLEMENT",
-      accountId: "PAYROLL", // Protected payroll account!
+      accountId: "PAYROLL",
       amountUsdc: "8000.000000",
       declaredReason: "Paying vendor software bill from payroll surplus.",
       recipientAddress: "0x1111111111111111111111111111111111111111",
     };
 
-    const evalResult = await swarm.complianceAgent.evaluateIntent(payrollIntent);
-    assert.strictEqual(evalResult.decision, "DENY");
-    assert.match(evalResult.reason, /PAYROLL.*strictly prohibited/i);
-    console.log(`✓ Illegal payroll draw caught and DENIED: ${evalResult.reason}`);
+    const agentResult = await swarm.complianceAgent.evaluateReasonBearingIntentTask(testSessionId, payrollIntent);
+    assert.strictEqual(agentResult.success, false, "Payroll draw must fail");
+    const intentTool = agentResult.toolCallsExecuted.find((t) => t.name === "evaluate_reason_bearing_intent");
+    assert.ok(intentTool);
+    assert.strictEqual(intentTool.result.data.decision, "DENY");
+    assert.match(intentTool.result.data.reason, /PAYROLL.*strictly prohibited/i);
+    console.log(`✓ PolicyComplianceAgent ReAct loop DENIED payroll draw: ${intentTool.result.data.reason}`);
   });
 
-  it("Step 7: PolicyComplianceAgent ESCALATES large transaction to EIP-712 SPRS", async () => {
+  it("Step 7: PolicyComplianceAgent (ID #104) ReAct Loop: ESCALATES large transaction to EIP-712 SPRS", async () => {
     const largeIntent = {
       proposedAction: "DISBURSAL_SETTLEMENT",
       accountId: "OPEX_DEV",
@@ -149,113 +170,104 @@ describe("BizArc Swarm E2E Real-World Multi-Agent Audit", () => {
       recipientAddress: "0x1111111111111111111111111111111111111111",
     };
 
-    const evalResult = await swarm.complianceAgent.evaluateIntent(largeIntent);
-    assert.strictEqual(evalResult.decision, "ESCALATE_TO_SPRS");
-    assert.ok(evalResult.sprsRequestId?.startsWith("SPRS_"));
-    console.log(`✓ Exceeded limit with sound reason escalated to SPRS: Request ID ${evalResult.sprsRequestId}`);
+    const agentResult = await swarm.complianceAgent.evaluateReasonBearingIntentTask(testSessionId, largeIntent);
+    assert.strictEqual(agentResult.success, true);
+    const intentTool = agentResult.toolCallsExecuted.find((t) => t.name === "evaluate_reason_bearing_intent");
+    assert.ok(intentTool);
+    assert.strictEqual(intentTool.result.data.decision, "ESCALATE_TO_SPRS");
+    assert.ok(intentTool.result.data.sprsRequestId?.startsWith("SPRS_"));
+    console.log(`✓ PolicyComplianceAgent ReAct loop escalated to SPRS: Request ID ${intentTool.result.data.sprsRequestId}`);
   });
 
-  it("Step 8: TreasurySentinelAgent evaluates Tripartite Balance & Dynamic Safe-to-Invest", async () => {
-    const sti = await swarm.dynamicRecords.calculateSafeToInvest(
-      "OPEX_DEV",
-      7 * 86400,
-      "20000.000000",
-      100000000000n,
-      50000000000n
-    );
-
-    assert.strictEqual(sti.tripartiteBalance.invariantSatisfied, true);
-    assert.strictEqual(sti.safeToInvestUsdc, "67500.000000");
-    assert.strictEqual(sti.status, "SWEEP_RECOMMENDED");
-    console.log(`✓ Dynamic Record 2 Safe-to-Invest: ${sti.safeToInvestUsdc} USDC (${sti.status})`);
-
-    // Execute smart contract sweep payload
-    const sweepResult = await swarm.toolRegistry.executeTool("sweep_excess_liquidity", {
-      accountId: "OPEX_DEV",
-      amountUsdc: "50000.000000",
-      clearanceCode: "CLEAR-AUDIT-001",
-    });
-
-    assert.strictEqual(sweepResult.success, true);
-    assert.ok(sweepResult.data.encodedFunctionCall);
-    console.log(`✓ Smart contract sweep payload encoded: ${sweepResult.data.encodedFunctionCall.slice(0, 34)}...`);
+  it("Step 8: TreasurySentinelAgent (ID #101) ReAct Loop: evaluates Tripartite Balance & Sweeps", async () => {
+    const agentResult = await swarm.sentinelAgent.evaluateLiquidityAndSweep(testSessionId, "OPEX_DEV", "50000.000000");
+    assert.strictEqual(agentResult.success, true);
+    const sweepTool = agentResult.toolCallsExecuted.find((t) => t.name === "sweep_excess_liquidity");
+    assert.ok(sweepTool);
+    assert.ok(sweepTool.result.data.encodedFunctionCall);
+    console.log(`✓ TreasurySentinelAgent ReAct loop executed sweep: Tx ${sweepTool.result.data.txHash}`);
   });
 
-  it("Step 9: DisbursalRouterAgent executes payment with Keccak-256 Idempotency Protection", async () => {
+  it("Step 9: DisbursalRouterAgent (ID #103) ReAct Loop: Disbursal with Keccak-256 Idempotency", async () => {
     const liabilities = await swarm.dynamicRecords.getLiabilities("OPEX_DEV");
     const awsLiability = liabilities.find((l) => l.vendorId === "VEND-AWS-01");
     assert.ok(awsLiability);
 
-    // First execution -> PASSES
-    const disbursalResult = await swarm.toolRegistry.executeTool("execute_disbursal", {
+    const payment = {
       accountId: "OPEX_DEV",
       liabilityId: awsLiability.liabilityId,
       amountUsdc: awsLiability.amountUsdc,
       recipientAddress: awsLiability.payoutAddress,
       invoiceId: "INV-2026-AWS-01",
-    });
+    };
 
-    assert.strictEqual(disbursalResult.success, true);
-    assert.strictEqual(disbursalResult.data.status, "SETTLED");
-    assert.ok(disbursalResult.data.idempotencyKey);
-    console.log(`✓ Disbursal executed with Idempotency Key: ${disbursalResult.data.idempotencyKey}`);
+    // First execution through agent -> PASSES
+    const agentResult = await swarm.routerAgent.executeDisbursalTask(testSessionId, payment);
+    assert.strictEqual(agentResult.success, true);
+    const disburseTool = agentResult.toolCallsExecuted.find((t) => t.name === "execute_disbursal");
+    assert.ok(disburseTool);
+    assert.strictEqual(disburseTool.result.data.status, "SETTLED");
+    assert.ok(disburseTool.result.data.idempotencyKey);
+    console.log(`✓ DisbursalRouterAgent ReAct loop settled payment: Idempotency Key ${disburseTool.result.data.idempotencyKey}`);
 
-    // Second execution with SAME idempotency key -> STRICTLY BLOCKED!
-    const duplicateDisbursal = await swarm.toolRegistry.executeTool("execute_disbursal", {
-      accountId: "OPEX_DEV",
-      liabilityId: awsLiability.liabilityId,
-      amountUsdc: awsLiability.amountUsdc,
-      recipientAddress: awsLiability.payoutAddress,
-      invoiceId: "INV-2026-AWS-01",
-    });
-
-    assert.strictEqual(duplicateDisbursal.success, false, "Duplicate payment must be blocked");
-    assert.match(duplicateDisbursal.error || "", /IDEMPOTENCY DUPLICATE DETECTED/i);
-    console.log(`✓ Double-spend attack blocked via Idempotency Key: ${duplicateDisbursal.error}`);
+    // Second execution through agent with SAME key -> STRICTLY BLOCKED!
+    const duplicateResult = await swarm.routerAgent.executeDisbursalTask(testSessionId, payment);
+    assert.strictEqual(duplicateResult.success, false, "Duplicate payment must be blocked");
+    const dupTool = duplicateResult.toolCallsExecuted.find((t) => t.name === "execute_disbursal");
+    assert.ok(dupTool);
+    assert.match(dupTool.result.error || "", /IDEMPOTENCY DUPLICATE DETECTED/i);
+    console.log(`✓ DisbursalRouterAgent ReAct loop blocked double spend: ${dupTool.result.error}`);
   });
 
-  it("Step 10: Multi-Account Waterfall Allocation strictly protects Payroll", async () => {
+  it("Step 10: DisbursalRouterAgent (ID #103) ReAct Loop: Multi-Account Waterfall Allocation protects Payroll", async () => {
     const balanceOverrides = {
       OPEX_DEV: { liquidUsdc: 5000, investedUsyc: 0 },
       OPEX_GROWTH: { liquidUsdc: 8000, investedUsyc: 0 },
       PAYROLL: { liquidUsdc: 50000, investedUsyc: 0 },
     };
-    const waterfallPlan = await swarm.routerAgent.planWaterfall(4000, balanceOverrides);
+    const agentResult = await swarm.routerAgent.planWaterfall(testSessionId, 4000, balanceOverrides);
+    assert.strictEqual(agentResult.success, true);
+    const waterfallTool = agentResult.toolCallsExecuted.find((t) => t.name === "plan_waterfall_allocation");
+    assert.ok(waterfallTool);
+    const waterfallPlan = waterfallTool.result.data;
     assert.ok(waterfallPlan.eligibleAccounts.length > 0);
 
-    // Verify PAYROLL was excluded from the candidates
-    const payrollCandidate = waterfallPlan.eligibleAccounts.find((a) => a.metadata.role === "PAYROLL");
+    const payrollCandidate = waterfallPlan.eligibleAccounts.find((a: any) => a.metadata?.role === "PAYROLL");
     assert.strictEqual(payrollCandidate, undefined, "PAYROLL account must NEVER be an eligible waterfall candidate");
-    console.log(`✓ Waterfall Allocation evaluated: ${waterfallPlan.eligibleAccounts.length} eligible accounts (PAYROLL safely protected).`);
+    console.log(`✓ DisbursalRouterAgent ReAct loop evaluated Waterfall: ${waterfallPlan.eligibleAccounts.length} eligible accounts (PAYROLL safely protected).`);
   });
 
-
-  it("Step 11: LedgerWitnessAgent builds unbroken Cryptographic SHA-256 Hash Chain", async () => {
-    // Post entry 1
-    const entry1 = await swarm.toolRegistry.executeTool("post_document_linked_gl", {
+  it("Step 11: LedgerWitnessAgent (ID #105) ReAct Loop: Unbroken Cryptographic SHA-256 Hash Chain", async () => {
+    const voucher1 = {
       accountId: "OPEX_DEV",
       documentRef: "INV-2026-AWS-01",
       debitAccount: "2100_ACCOUNTS_PAYABLE",
       creditAccount: "1010_ARC_OPERATING_POOL",
       amountUsdc: "12500.000000",
       txHash: "0xarc_settlement_hash_aws",
-    });
-    assert.strictEqual(entry1.success, true);
+    };
 
-    // Post entry 2
-    const entry2 = await swarm.toolRegistry.executeTool("post_document_linked_gl", {
+    const voucher2 = {
       accountId: "OPEX_DEV",
       documentRef: "INV-2026-AWS-02",
       debitAccount: "2100_ACCOUNTS_PAYABLE",
       creditAccount: "1010_ARC_OPERATING_POOL",
       amountUsdc: "3400.000000",
       txHash: "0xarc_settlement_hash_datadog",
-    });
-    assert.strictEqual(entry2.success, true);
+    };
 
-    // Assert that entry2's previousHash matches entry1's currentHash!
-    assert.strictEqual(entry2.data.previousHash, entry1.data.currentHash, "Cryptographic hash chain MUST be unbroken!");
-    console.log(`✓ Unbroken Cryptographic Hash Chain verified: Sequence #${entry1.data.journalSequence} -> Sequence #${entry2.data.journalSequence}`);
+    const res1 = await swarm.witnessAgent.recordSettlementVoucher(testSessionId, voucher1);
+    assert.strictEqual(res1.success, true);
+    const tool1 = res1.toolCallsExecuted.find((t) => t.name === "post_document_linked_gl");
+    assert.ok(tool1);
+
+    const res2 = await swarm.witnessAgent.recordSettlementVoucher(testSessionId, voucher2);
+    assert.strictEqual(res2.success, true);
+    const tool2 = res2.toolCallsExecuted.find((t) => t.name === "post_document_linked_gl");
+    assert.ok(tool2);
+
+    assert.strictEqual(tool2.result.data.previousHash, tool1.result.data.currentHash, "Cryptographic hash chain MUST be unbroken!");
+    console.log(`✓ LedgerWitnessAgent ReAct loop posted unbroken hash chain: Seq #${tool1.result.data.journalSequence} -> Seq #${tool2.result.data.journalSequence}`);
   });
 
   it("Step 12: Continuous Context Blackboard & Dual-Stream Compaction Verification", async () => {

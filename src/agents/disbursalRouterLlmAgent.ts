@@ -43,14 +43,16 @@ Your primary mandate is safe payment execution and multi-account waterfall routi
   }
 
   /**
-   * Plans multi-account waterfall allocation for large disbursements.
-   * Respects minimum operating floors, safety ratios, and payroll account exclusions.
+   * Autonomous LLM Multi-Account Waterfall Planning.
+   * Runs the ReAct deliberation loop through the model-agnostic LLM engine using plan_waterfall_allocation tool.
    */
   public async planWaterfall(
+    sessionId: string,
     requiredAmountUsdc: number,
     balanceOverrides?: Record<string, { liquidUsdc?: number; investedUsyc?: number }>
-  ): Promise<WaterfallCandidatePlan> {
-    return this.accountIntelligence.getWaterfallCandidateAccounts(requiredAmountUsdc, balanceOverrides);
+  ) {
+    const task = `Evaluate multi-account waterfall allocation for ${requiredAmountUsdc} USDC disbursal across active operating accounts. Run plan_waterfall_allocation tool. Strictly verify that payroll accounts (role === PAYROLL) are completely excluded from the draw candidate list.`;
+    return this.executeTask(sessionId, task, { requiredAmountUsdc, balanceOverrides });
   }
 
 
@@ -64,4 +66,24 @@ Your primary mandate is safe payment execution and multi-account waterfall routi
   ): `0x${string}` {
     return DisbursalVaultService.generateIdempotencyKey(vendorAddress, invoiceId, amountRaw);
   }
+
+  /**
+   * Autonomous LLM Disbursal Routing & Execution via DisbursalVault.
+   * Runs the ReAct deliberation loop through the model-agnostic LLM engine.
+   */
+  public async executeDisbursalTask(
+    sessionId: string,
+    payment: {
+      accountId: string;
+      liabilityId: string;
+      amountUsdc: string;
+      recipientAddress: string;
+      invoiceId: string;
+    }
+  ) {
+    const task = `Execute staged payment via DisbursalVault on Arc L1 for liability ${payment.liabilityId} of ${payment.amountUsdc} USDC to recipient ${payment.recipientAddress} for invoice ${payment.invoiceId}. Verify Keccak-256 idempotency key to prevent double spending.`;
+    return this.executeTask(sessionId, task, payment);
+  }
 }
+
+export { DisbursalRouterLlmAgent as DisbursalRouterAgent };

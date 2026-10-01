@@ -159,83 +159,273 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
     const content = (lastMsg?.content || "").toLowerCase();
     const systemPrompt = (systemMsg?.content || "").toLowerCase();
 
-    // If the last message was a tool result, synthesize the final answer
+    // If the last message was a tool result, synthesize the final answer based on the real result
     if (lastMsg?.role === "tool") {
-      return {
-        content: `Acknowledged tool execution result: ${lastMsg.content}. Analysis complete according to policy guardrails.`,
-        finish_reason: "stop",
-      };
+      let parsedResult: any = {};
+      try {
+        parsedResult = JSON.parse(lastMsg.content || "{}");
+      } catch (e) {
+        parsedResult = { raw: lastMsg.content };
+      }
+
+      if (parsedResult.success === false) {
+        return {
+          content: `Deliberation Conclusion: Operation halted. Invariant check failed: ${parsedResult.error || "Unknown rejection"}. Escalating alert to compliance auditor.`,
+          finish_reason: "stop",
+        };
+      } else {
+        return {
+          content: `Deliberation Conclusion: Operation verified and executed cleanly. Result: ${JSON.stringify(parsedResult.data || {})}. State recorded in continuous context.`,
+          finish_reason: "stop",
+        };
+      }
     }
 
-    // Agent: Liability Radar / Invoice Verification
+    // Dynamic Parameter Extraction from Conversation Task Text
+    const userMsg = [...messages].reverse().find((m) => m.role === "user");
+    const rawTask = userMsg?.content || "";
+
+    let payloadObj: any = undefined;
+    const payloadMatch = rawTask.match(/Context Payload:\s*(\{.*\})/s);
+    if (payloadMatch) {
+      try {
+        payloadObj = JSON.parse(payloadMatch[1]);
+      } catch (e) {}
+    }
+
+    const invoiceMatch = rawTask.match(/INV-[A-Za-z0-9-_]+/i) || rawTask.match(/(?:invoice|inv)\s+([A-Za-z0-9-_]+)/i);
+    const invoiceId = payloadObj?.invoiceId || (invoiceMatch ? (invoiceMatch[1] || invoiceMatch[0]) : "INV-DEFAULT-01");
+
+    const poMatch = rawTask.match(/PO-[A-Za-z0-9-_]+/i) || rawTask.match(/(?:purchase order|po)\s+([A-Za-z0-9-_]+)/i);
+    const poReference = payloadObj?.poReference || (poMatch ? (poMatch[1] || poMatch[0]) : "PO-2026-AWS-01");
+
+    const addrMatch =
+      rawTask.match(/claimed payout address\s+(0x[a-zA-Z0-9]+)/i) ||
+      rawTask.match(/payout address\s+(0x[a-zA-Z0-9]+)/i) ||
+      rawTask.match(/to recipient\s+(0x[a-zA-Z0-9]+)/i) ||
+      rawTask.match(/0x[a-fA-F0-9]{40,42}/) ||
+      rawTask.match(/0x[a-zA-Z0-9]{20,42}/);
+    const payoutAddress = payloadObj?.claimedPayoutAddress || payloadObj?.recipientAddress || (addrMatch ? (addrMatch[1] || addrMatch[0]) : "0x1111111111111111111111111111111111111111");
+
+    const amtMatch = rawTask.match(/(?:for|amount|sum of|\$)\s*(\d+(?:\.\d+)?)/i) || rawTask.match(/(\d+\.\d{6})/);
+    let amountUsdc = payloadObj?.amountUsdc ? payloadObj.amountUsdc : (amtMatch ? amtMatch[1] : "12500.000000");
+    if (!amountUsdc.includes(".")) amountUsdc += ".000000";
+    else {
+      const parts = amountUsdc.split(".");
+      amountUsdc = `${parts[0]}.${parts[1].padEnd(6, "0").slice(0, 6)}`;
+    }
+
+    const accMatch = rawTask.match(/(?:account|acc|for)\s+([A-Z_]+)/i) || rawTask.match(/OPEX_[A-Z]+|PAYROLL|CAPEX/i);
+    const accountId = payloadObj?.accountId || (accMatch ? (accMatch[1] || accMatch[0]) : "OPEX_DEV");
+
+    const liabilityMatch = rawTask.match(/liability\s+([A-Za-z0-9-_]+)/i) || rawTask.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    const liabilityId = payloadObj?.liabilityId || (liabilityMatch ? (liabilityMatch[1] || liabilityMatch[0]) : "LIA-AWS-01");
+
+    // Dynamic Tool Dispatch based on Available Tools & Task Intent
+    // 1. Three-Way Match Verification
     if (
       tools?.some((t) => t.function.name === "verify_three_way_match") &&
-      (content.includes("invoice") || content.includes("bill") || content.includes("liability"))
+      (content.includes("invoice") || content.includes("match") || content.includes("bill"))
     ) {
-      const toolCall: LlmToolCall = {
-        id: `call_${Date.now()}_match`,
-        type: "function",
-        function: {
-          name: "verify_three_way_match",
-          arguments: JSON.stringify({
-            invoiceId: "INV-2026-901",
-            poReference: "PO-2026-AWS-01",
-            claimedAmountUsdc: "12500.000000",
-            claimedPayoutAddress: "0x1111111111111111111111111111111111111111",
-          }),
-        },
-      };
       return {
-        content: "Executing 3-way match verification between Purchase Order, Goods Receipt, and Vendor Invoice.",
-        tool_calls: [toolCall],
+        content: `Deliberating on invoice ${invoiceId}: Initiating strict Three-Way Match verification against Purchase Order ${poReference} and Vendor Master.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_match`,
+            type: "function",
+            function: {
+              name: "verify_three_way_match",
+              arguments: JSON.stringify({
+                invoiceId,
+                poReference,
+                claimedAmountUsdc: amountUsdc,
+                claimedPayoutAddress: payoutAddress,
+              }),
+            },
+          },
+        ],
         finish_reason: "tool_calls",
       };
     }
 
-    // Agent: Treasury Sentinel / Liquidity Sweeper
+    // 2. Reason-Bearing Intent Evaluation
+    if (
+      tools?.some((t) => t.function.name === "evaluate_reason_bearing_intent") &&
+      (content.includes("intent") || content.includes("permit") || content.includes("compliance") || content.includes("tier a") || content.includes("tier b"))
+    ) {
+      const action = payloadObj?.proposedAction || (content.includes("sweep") ? "AUTONOMOUS_SWEEP" : "DISBURSAL_SETTLEMENT");
+      return {
+        content: `Evaluating Reason-Bearing Intent for ${action} of ${amountUsdc} USDC on account ${accountId}.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_intent`,
+            type: "function",
+            function: {
+              name: "evaluate_reason_bearing_intent",
+              arguments: JSON.stringify({
+                proposedAction: action,
+                accountId,
+                amountUsdc,
+                declaredReason: payloadObj?.declaredReason || rawTask,
+                recipientAddress: payoutAddress,
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 3. Multi-Account Waterfall Allocation
+    if (
+      tools?.some((t) => t.function.name === "plan_waterfall_allocation") &&
+      content.includes("waterfall")
+    ) {
+      const requiredNum = payloadObj?.requiredAmountUsdc || parseFloat(amountUsdc);
+      return {
+        content: `Planning multi-account waterfall allocation for ${requiredNum} USDC. Enforcing payroll protection.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_waterfall`,
+            type: "function",
+            function: {
+              name: "plan_waterfall_allocation",
+              arguments: JSON.stringify({
+                requiredAmountUsdc: requiredNum,
+                balanceOverrides: payloadObj?.balanceOverrides,
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 4. Sweep Excess Liquidity (prioritized over general STI check when sweep is requested)
+    if (
+      tools?.some((t) => t.function.name === "sweep_excess_liquidity") &&
+      content.includes("sweep")
+    ) {
+      return {
+        content: `Executing autonomous sweep of ${amountUsdc} USDC into USYC Yield Vault for account ${accountId}.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_sweep`,
+            type: "function",
+            function: {
+              name: "sweep_excess_liquidity",
+              arguments: JSON.stringify({
+                accountId,
+                amountUsdc: payloadObj?.customAmount || amountUsdc,
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 5. Safe-to-Invest Recalculation
     if (
       tools?.some((t) => t.function.name === "recalculate_safe_to_invest") &&
-      (content.includes("treasury") || content.includes("liquidity") || content.includes("sweep") || content.includes("safe-to-invest"))
+      (content.includes("safe-to-invest") || content.includes("liquidity") || content.includes("tripartite"))
     ) {
-      const toolCall: LlmToolCall = {
-        id: `call_${Date.now()}_sti`,
-        type: "function",
-        function: {
-          name: "recalculate_safe_to_invest",
-          arguments: JSON.stringify({
-            accountId: "OPEX_DEV",
-            timeHorizonSeconds: 604800, // 7 days
-          }),
-        },
-      };
       return {
-        content: "Calculating dynamic safe-to-invest liquidity and assessing tripartite balance reserves.",
-        tool_calls: [toolCall],
+        content: `Calculating Dynamic Safe-to-Invest (Record 2) for account ${accountId}.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_sti`,
+            type: "function",
+            function: {
+              name: "recalculate_safe_to_invest",
+              arguments: JSON.stringify({
+                accountId,
+                timeHorizonSeconds: 604800,
+              }),
+            },
+          },
+        ],
         finish_reason: "tool_calls",
       };
     }
 
-    // Agent: Disbursal Router / Payment Execution
+    // 6. Disbursal Execution
     if (
       tools?.some((t) => t.function.name === "execute_disbursal") &&
-      (content.includes("pay") || content.includes("disburse") || content.includes("execute"))
+      (content.includes("pay") || content.includes("disburse") || content.includes("settle"))
     ) {
-      const toolCall: LlmToolCall = {
-        id: `call_${Date.now()}_pay`,
-        type: "function",
-        function: {
-          name: "execute_disbursal",
-          arguments: JSON.stringify({
-            accountId: "OPEX_DEV",
-            liabilityId: "LIA-AWS-001",
-            amountUsdc: "12500.000000",
-            recipientAddress: "0x1111111111111111111111111111111111111111",
-          }),
-        },
-      };
       return {
-        content: "Checking policy caps and executing staged disbursal via DisbursalVault.",
-        tool_calls: [toolCall],
+        content: `Executing staged payment of ${amountUsdc} USDC to ${payoutAddress} via DisbursalVault on Arc L1.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_disburse`,
+            type: "function",
+            function: {
+              name: "execute_disbursal",
+              arguments: JSON.stringify({
+                accountId,
+                liabilityId,
+                amountUsdc,
+                recipientAddress: payoutAddress,
+                invoiceId,
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 7. General Ledger Witness & Hash Chaining
+    if (
+      tools?.some((t) => t.function.name === "post_document_linked_gl") &&
+      (content.includes("witness") || content.includes("journal") || content.includes("ledger") || content.includes("voucher"))
+    ) {
+      const txMatch = rawTask.match(/0x[a-zA-Z0-9_]{10,66}/);
+      const txHash = txMatch ? txMatch[0] : "0xarc_settlement_receipt";
+      return {
+        content: `Posting document-linked GL entry to ERP and appending to sequential master journal with cryptographic SHA-256 hash chain.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_witness`,
+            type: "function",
+            function: {
+              name: "post_document_linked_gl",
+              arguments: JSON.stringify({
+                accountId,
+                documentRef: invoiceId,
+                debitAccount: "2100_ACCOUNTS_PAYABLE",
+                creditAccount: "1010_ARC_OPERATING_POOL",
+                amountUsdc,
+                txHash,
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 8. Vector Memory Search
+    if (
+      tools?.some((t) => t.function.name === "query_vector_memory") &&
+      (content.includes("search") || content.includes("query") || content.includes("bylaws") || content.includes("msa"))
+    ) {
+      return {
+        content: `Querying Enterprise Vector Memory for relevant context: "${rawTask}".`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_vector`,
+            type: "function",
+            function: {
+              name: "query_vector_memory",
+              arguments: JSON.stringify({
+                query: rawTask,
+                topK: 3,
+              }),
+            },
+          },
+        ],
         finish_reason: "tool_calls",
       };
     }
@@ -245,6 +435,7 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
       content: `[Simulated LLM] Deliberation complete for agent task. Operating under declared policies on Arc L1.`,
       finish_reason: "stop",
     };
+
   }
 
   /**

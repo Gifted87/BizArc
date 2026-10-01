@@ -20,4 +20,25 @@ Your primary mandate is Golden Rule 1 & Golden Rule 4:
       ...deps,
     });
   }
+
+  /**
+   * Autonomous LLM Recording of Document-Linked Voucher in Master System Journal.
+   * Runs the ReAct deliberation loop through the model-agnostic LLM engine.
+   */
+  public async recordSettlementVoucher(
+    sessionId: string,
+    voucher: {
+      accountId: string;
+      documentRef: string;
+      debitAccount: string;
+      creditAccount: string;
+      amountUsdc: string;
+      txHash: string;
+    }
+  ) {
+    const task = `Witness and record document-linked GL entry for invoice ${voucher.documentRef} on account ${voucher.accountId} for ${voucher.amountUsdc} USDC. Append to master system journal with cryptographic SHA-256 hash chain tied to transaction receipt ${voucher.txHash}.`;
+    return this.executeTask(sessionId, task, voucher);
+  }
 }
+
+export { LedgerWitnessLlmAgent as LedgerWitnessAgent };

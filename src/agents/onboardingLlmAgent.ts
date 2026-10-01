@@ -22,3 +22,5 @@ Your primary mandate is enterprise initialization and ground truth seeding:
     });
   }
 }
+
+export { OnboardingLlmAgent as OnboardingAgent };

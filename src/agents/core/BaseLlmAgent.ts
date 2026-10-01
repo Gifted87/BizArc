@@ -74,13 +74,17 @@ export abstract class BaseLlmAgent {
       metadata: initialMetadata,
     });
 
+    const enrichedTask = initialMetadata
+      ? `${taskDescription}\nContext Payload: ${JSON.stringify(initialMetadata)}`
+      : taskDescription;
+
     // 2. Assemble multi-tier context (Hot blackboard + Compacted anchors + Vector retrieval)
     const assembledContext = await this.contextManager.assembleAgentContext(
       sessionId,
       this.agentId,
       this.agentName,
       this.systemInstruction,
-      taskDescription
+      enrichedTask
     );
 
     const messages: LlmMessage[] = [...assembledContext.messages];
