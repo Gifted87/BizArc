@@ -832,15 +832,36 @@ This document translates the complete product vision into an exhaustive technica
 - **Skills Consulted**:
   - [`agent-wallet-policy`](file:///C:/Users/hp/.gemini/config/skills/agent-wallet-policy/SKILL.md) (Autonomous Spending Policies)
   - [`build-on-arc`](file:///C:/Users/hp/.gemini/config/skills/build-on-arc/SKILL.md) (Autonomous Execution)
-- **The Core Problem**: Human operators get alert fatigue if the agent asks for permission for every micro-sweep of $\$50$ into USYC or every automatic replenishment for a pre-approved bill.
-- **Architectural Solution: Autonomous Fast-Path Execution Engine**:
-  1. The `PolicyComplianceAgent` validates against the fast-path condition:
-     - Condition 1: $\text{Action} == \text{'SWEEP\_TO\_USYC'} \land \text{Amount} \le \text{SafeToInvest}$.
-     - Condition 2: $\text{Action} == \text{'RECALL\_FROM\_USYC'} \land \text{linked\_to\_approved\_liability} == \text{True}$.
-  2. If matched:
-     - Execution is dispatched immediately to the blockchain.
+  - [`agents-and-ledgers`](file:///C:/Users/hp/.gemini/config/skills/agents-and-ledgers/SKILL.md) (Rule 6: Model Output as Suggestion)
+- **The Core Problem**: Human operators get alert fatigue if the agent asks for permission for every micro-sweep of $\$50$ into USYC or every automatic replenishment for a pre-approved bill. Conversely, letting an agent act without governance leads to rogue fund movements.
+- **Architectural Solution: Autonomous Fast-Path Execution Engine & Reason-Bearing Intent**:
+  1. **Segregation of Authority**:
+     - `TreasurySentinelAgent` is the *Operator* (proposes actions, declares explicit reasoning).
+     - `PolicyComplianceAgent` is the *Enforcer* (evaluates proposal against Mathematical Rules & Declared Policies, issues execution clearance tokens).
+  2. **The Reason-Bearing Intent**:
+     Whenever `TreasurySentinelAgent` proposes an automatic movement, it must submit a structured intent containing its operational rationale:
+     ```json
+     {
+       "action": "AUTONOMOUS_SWEEP",
+       "accountId": "acc_engineering",
+       "amountUsdc": "500.000000",
+       "declaredReason": "Inflow of $800 customer revenue detected. Target reserve is $230 based on 14-day liabilities. Sweeping $500 captures 5.1% USYC yield while maintaining $300 liquid reserve ($70 above target reserve).",
+       "currentLiquid": "800.000000",
+       "targetReserve": "230.000000",
+       "safeToInvest": "560.000000"
+     }
+     ```
+  3. **Fast-Path Verification**:
+     - `PolicyComplianceAgent` validates:
+       - $\text{Amount} \le \text{SafeToInvest}$
+       - $\text{CurrentLiquid} - \text{Amount} \ge \text{TargetReserve}$
+       - Account is not flagged `exclude_from_waterfall_draws` (e.g. Payroll).
+       - Amount $\le \text{max\_autonomous\_sweep\_limit}$.
+       - No conflicting Declared Policies.
+  4. If all rules pass:
+     - Returns `PERMIT` with a clearance token.
+     - Execution is dispatched immediately to `CentralTreasuryYieldVault.sol`.
      - The event is logged in both `account_agent_audit_log` and `master_system_journal` with `is_autonomous: true`.
-     - An asynchronous webhook updates telemetry without pausing the system.
 
 ---
 
@@ -850,16 +871,24 @@ This document translates the complete product vision into an exhaustive technica
 ### Technical Analysis & Skill Mapping
 - **Skills Consulted**:
   - [`agent-wallet-policy`](file:///C:/Users/hp/.gemini/config/skills/agent-wallet-policy/SKILL.md) (OTP / Human Gate Protocol)
-  - [`agents-and-ledgers`](file:///C:/Users/hp/.gemini/config/skills/agents-and-ledgers/SKILL.md) (Rule 6: Model Output as Suggestion)
-- **The Core Problem**: Letting an agent act unilaterally when parameters breach safety boundaries leads to catastrophic loss.
-- **Architectural Solution: The Mandatory Human Gate Controller**:
-  1. Triggers that divert an action to the Human Gate:
-     - Payment to a new vendor.
-     - Any vendor whose payout address changed from master registry (Payee Substitution Flag).
-     - Any invoice amount differing from the approved Purchase Order (Precision / Rounding Flag).
-     - Single transaction amount $> \text{single\_tx\_human\_gate\_threshold}$.
-     - Multi-account waterfall rebalance.
-  2. The agent sets transaction state to `BLOCKED_AWAITING_APPROVAL`, issues the SPRS request, and waits until a cryptographic signature or admin approval callback is registered.
+  - [`agents-and-ledgers`](file:///C:/Users/hp/.gemini/config/skills/agents-and-ledgers/SKILL.md) (Rule 3: Payee Protection, Rule 6: Model Output as Suggestion)
+- **The Core Problem**: Rigid scripts either fail to execute beneficial out-of-bounds actions or crash. Unbounded LLMs hallucinate illegal fund movements.
+- **Architectural Solution: Dual-Tier Governance & Tri-State Escalation**:
+  1. **Dual-Tier Policy Framework**:
+     - **Tier A: Mathematical Rules (Hard Deterministic Bounds)**: Minimum operating floors, safety multipliers, spending caps, hysteresis thresholds.
+     - **Tier B: Declared Policies (Written / Prompted Rules Defined by Humans)**: Natural-language business directives (e.g., *"Never pay cloud infrastructure from marketing budget"*, *"Escalate any vendor price increase > 15%"*). **Crucial Invariant**: The agent can only *suggest*; humans *explicitly define* all policies.
+  2. **The Tri-State Evaluation Outcomes**:
+     - **Outcome 1: `PERMIT`**: Action strictly complies with Mathematical Rules and Declared Policies $\to$ Fast-path clearance token issued.
+     - **Outcome 2: `DENY`**: Action violates hard invariants (e.g., payroll draw for operating expense, unverified payee address) $\to$ Instant hard stop with rejection code.
+     - **Outcome 3: `ESCALATE_TO_SPRS`**: 
+       - *Trigger A (Ambiguous / Hard Decision)*: Conflicting declared policies detected.
+       - *Trigger B (Outside Rules with Reasonable Intent)*: The Treasury Agent proposes an action outside standard thresholds (e.g., sweeping $\$12,000$ when limit is $\$5,000$ to capture USYC yield on unexpected customer revenue) and declares a valid commercial reason.
+  3. **Rich SPRS Formulation**:
+     The Evaluation Agent formulates an enriched Standardized Permission Request:
+     - The Proposal & Treasury's `declaredReason`.
+     - The Conflicting Rule / Policy that was breached.
+     - Live Tripartite Balance Context ($B_L, B_Y, B_E$).
+     - Binary Options: `APPROVE` (executes via admin EIP-712 signature) or `CANCEL_WITH_INSTRUCTIONS`.
 
 ---
 
@@ -1118,12 +1147,16 @@ This document translates the complete product vision into an exhaustive technica
 
 #### 4. `PolicyComplianceAgent`
 * **System Prompt Core**:
-  > *"You are the Financial Governance Officer. You ensure that every fund movement complies with the canonical business_policy.yaml. Inside the rules, you grant immediate fast-path clearance. Outside the rules (new vendors, changed payout addresses, amounts above threshold, multi-account draws), you construct the Standardized Permission Request (SPRS) and enforce mandatory human approval."*
+  > *"You are the Chief Financial Governance & Enforcement Officer. You hold NO private keys to execute transfers; your sole authority is to evaluate proposals, issue cryptographic clearance tokens, enforce hard invariants, and escalate edge cases. You evaluate reason-bearing intents from operator agents against both Mathematical Rules and human-defined Declared Policies. When an action is safe and compliant, issue immediate clearance. When an action violates hard protections (like payroll), issue an immediate hard DENY. When an action is outside rules but the operator declares a commercially valid reason, or when policies conflict, escalate an enriched SPRS to the human executive."*
 * **Autonomous Decision Loops**:
-  - Validates transactions against the Vendor Master and contract allowlists.
-  - Calculates risk scores (detecting Payee Substitution or rounding anomalies).
-  - Formulates the structured SPRS JSON payload with context and options.
-  - Validates EIP-712 human admin signatures before releasing the execution lock.
+  - Ingests structured reason-bearing proposals (`action`, `accountId`, `amountUsdc`, `declaredReason`, `projectedState`).
+  - Evaluates **Mathematical Rules**: Verifies operating floors, target reserves, spending caps, hysteresis, and payroll isolation.
+  - Evaluates **Declared Policies**: Verifies prompted business rules (cost-center integrity, vendor change flags, tax reserve holdbacks). Note: Agents only suggest policies; humans explicitly define and sign off.
+  - Generates Tri-State Decisions:
+    - **`PERMIT`**: Fast-path clearance code + cryptographic intent token for immediate Arc L1 dispatch.
+    - **`DENY`**: Rejection code with diagnostic rationale returned to operator.
+    - **`ESCALATE_TO_SPRS`**: Packages proposal, operator's `declaredReason`, conflicting policy, live tripartite balances, and binary decision buttons (`APPROVE` via EIP-712 or `CANCEL_WITH_INSTRUCTIONS`).
+  - Validates EIP-712 human admin signatures before releasing execution locks.
 
 #### 5. `LedgerWitnessAgent`
 * **System Prompt Core**:
@@ -1573,6 +1606,128 @@ CREATE TABLE master_system_journal (
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+# SECTION 7: Business Ingestion, Enterprise ERP Integration (ERPNext / Odoo), & Automated Onboarding Agent Workflow
+
+## 1. Enterprise ERP Integration & Real-World Accounting Guardrails
+
+Enterprise corporate liabilities and accounting ledgers live in established ERP systems such as **ERPNext** (Frappe framework) and **Odoo** (`account.move`). BizArc integrates directly with these platforms as its real-world system of record while serving as the autonomous execution and USYC yield optimization layer on Arc L1.
+
+### A. The Six Golden Rules of Financial Agents (Guided by `agents-and-ledgers`)
+
+1. **Rule 1: Document-Linked Ledgers Only**:
+   - In Odoo, transactions link to `account.move` document IDs.
+   - In ERPNext, general ledger entries derive exclusively from validated `Purchase Invoice` and `Payment Entry` vouchers.
+   - BizArc never posts unlinked general ledger adjustments; every fund movement is permanently bound to the underlying invoice ID and the immutable Arc L1 transaction hash.
+2. **Rule 2: Programmatic Three-Way Matching (PO vs. Receipt vs. Invoice)**:
+   - Before an ERP invoice enters Dynamic Record 1 (`account_liabilities`), `LiabilityRadarAgent` verifies:
+     - **Purchase Order (PO)**: Approved quantity and unit price match the invoice.
+     - **Goods Receipt Note (GRN) / Delivery Note**: Authenticated proof of delivery exists in the ERP.
+     - **Invoice Amount**: Strictly matches the approved PO.
+   - If delivery proof is missing, the invoice is tagged `UNMATCHED_PENDING_DELIVERY` and locked from payment.
+3. **Rule 3: Vendor Master Change Control (Payee Substitution Defense)**:
+   - Attackers and invoice fraud rarely manipulate line items—they modify the destination payout address.
+   - BizArc checks the invoice payout address against the ERP's verified, immutable Vendor Master Registry. If an address deviates, payment is frozen immediately and escalated to the human gate.
+4. **Rule 4: Independent External Witness (Zero-Signing Capability)**:
+   - `LedgerWitnessAgent` (ERC-8004 Agent ID #105) observes Arc L1 block receipts independently of the executing agents. It posts double-entry vouchers and verifies that transaction execution matches intended recipient and amount.
+5. **Rule 5: Refuse Silent Rounding (Loud Repair)**:
+   - ERPNext by default sweeps discrepancies up to 0.5 units into a silent `Round Off` expense account. When moving 6-decimal USDC ($100.000000$) on Arc, silent rounding accumulates phantom errors. BizArc enforces strict micro-unit precision, loudly alerting on any discrepancy rather than permitting silent sweeps.
+6. **Rule 6: Model Output as Suggestion, Never as Unilateral Execution Condition**:
+   - LLMs classify, summarize, and propose actions; deterministic smart contracts and mathematical constraint functions govern actual fund movement.
+
+---
+
+## 2. Automated Onboarding Agent Workflow (`OnboardingAgent`)
+
+The platform eliminates tedious DevOps setup by deploying an autonomous **Onboarding Coordinator Agent** (`OnboardingAgent`) that discovers business context from documents and ERPs, prepares configurations, provisions wallets, and coordinates human hand-offs.
+
+### 7-Phase Onboarding Matrix: Automated vs. Human Hand-offs
+
+| Phase | Milestone | Execution Mode | Description |
+|---|---|---|---|
+| **Phase 1** | **Entity Discovery** | 🤖 Fully Automated | Ingests corporate intake data, ERP credentials (ERPNext / Odoo), uploaded contracts, and billing PDFs. Maps operational cost centers (Engineering, Marketing, Operations, Payroll) and extracts historical vendors. |
+| **Phase 2** | **Account & Policy Generation** | 🤖 Fully Automated | Synthesizes discovered data into a suggested `business_policy.yaml` with proposed operating cash floors, safety multipliers (e.g. 1.20×), and draft declared policies. **The agent only suggests; the human operator reviews and explicitly commits.** |
+| **Phase 3** | **Circle Agent Wallet Creation** | 🤖 Fully Automated | Uses Circle Developer-Controlled Wallets SDK / CLI to provision segregated MPC Agent Wallets on Arc L1 for each approved cost center (`acc_engineering`, `acc_marketing`, `acc_payroll`, `acc_general_treasury`). |
+| **Phase 4** | **Database & Ledger Initialization** | 🤖 Fully Automated | Seeds PostgreSQL database with accounts, registers verified vendors into `vendor_master_registry`, establishes genesis hash in `master_system_journal`, and synchronizes open ERP liabilities. |
+| **Phase 5** | **Smart Contract Registration & Allowances** | 🤖 Fully Automated | Registers newly created accounts with `CentralTreasuryYieldVault.sol` and configures necessary ERC-20 allowances on the Arc USDC predeploy (`0x3600000000000000000000000000000000000000`). |
+| **Phase 6** | **Spending Guardrails Setup** | 👤 Human Hand-off | To protect root keys, `OnboardingAgent` outputs a verbatim CLI command for the administrator to execute in their local terminal, confirming spending caps via email OTP: <br/>`circle wallet limit set --address 0xAcmeEng... --chain ARC --per-tx 1000 --daily 5000` |
+| **Phase 7** | **Funding & Autonomous Activation** | 👤 Single Deposit | Admin transfers initial operating capital via crypto or fiat QR. `TreasurySentinelAgent` detects the inflow via the Arc System Emitter, debounces, and engages autonomous yield optimization. |
+
+---
+
+## 3. The Dual Dynamic Records & Tripartite Balance Architecture
+
+The platform's continuous operational intelligence is anchored on **two dynamic records** and a **parallel tripartite balance model**:
+
+```mermaid
+flowchart TD
+    subgraph "Dynamic Record 1: Liabilities & Schedules"
+        R1["account_liabilities (PostgreSQL)<br/>• account_id & vendor_id<br/>• exact amount (6-decimal USDC)<br/>• due_date & frequency cron<br/>• verified payout_address<br/>• source document hash (Rule 1)<br/>• Three-Way Match status (Rule 2)"]
+    end
+
+    subgraph "Dynamic Record 2: Safe-To-Invest & Liquidity Horizon"
+        R2["AccountIntelligenceService.solvencyMetrics<br/>• safeToInvestUsdc<br/>• timeHorizonSeconds: min(due_date) - now - lead_time<br/>• requiredTargetReserveUsdc<br/>• Recalculated on ANY balance mutation"]
+    end
+
+    subgraph "Parallel Tripartite Balance Model"
+        BAL["AccountIntelligenceService.balances<br/>• liquidUsdc (B_L)<br/>• investedUsycUsdcEquivalent (B_Y)<br/>• totalEffectiveUsdc (B_E = B_L + B_Y)"]
+    end
+
+    R1 --> R2
+    BAL --> R2
+```
+
+1. **Dynamic Record 1 (Account Liabilities & Recurring Schedules)**:
+   - Persisted in `account_liabilities` and continually maintained by `LiabilityRadarAgent`.
+   - Tracks all obligations, payment frequency crons, verified payee addresses, and Three-Way Match audit statuses.
+2. **Dynamic Record 2 (Safe-to-Invest & Liquidity Horizon)**:
+   - Computed dynamically by `AccountIntelligenceService` on every balance change.
+   - Calculates the exact capital surplus available for USYC yield and the maximum allowable duration before recall is required.
+3. **The Parallel Tripartite Balance Record ($B_E = B_L + B_Y$)**:
+   - Represents total economic solvency. If an account holds $\$20$ liquid USDC and $\$80$ in USYC, the agent evaluates affordability against the **Available Balance of $\$100$**, preventing false insolvency rejections and triggering automated predictive recall of $\$70$ from USYC when an approved $\$90$ bill is due.
+
+---
+
+## 4. Reason-Bearing Intent & The Policy Compliance Engine
+
+Every fund movement is governed by the segregation of authority between the **Operator** (`TreasurySentinelAgent`) and the **Enforcer** (`PolicyComplianceAgent`):
+
+```mermaid
+sequenceDiagram
+    participant Operator as TreasurySentinelAgent (Operator)
+    participant Enforcer as PolicyComplianceAgent (Enforcer)
+    participant Vault as CentralTreasuryYieldVault (Arc L1)
+    participant Admin as Human Executive (SPRS Gate)
+
+    Operator->>Enforcer: Submit Reason-Bearing Intent (Action + Amount + declaredReason)
+    Note over Enforcer: Evaluates Mathematical Rules & Declared Policies
+    alt Fully Compliant (Inside Rules)
+        Enforcer-->>Operator: PERMIT (Clearance Code + Cryptographic Token)
+        Operator->>Vault: Dispatch Onchain Execution
+    alt Hard Invariant Violation
+        Enforcer-->>Operator: DENY (Immediate Rejection Code + Diagnostics)
+    alt Ambiguous / Outside Rules with Reasonable Intent
+        Enforcer->>Admin: ESCALATE_TO_SPRS (Proposal, declaredReason, Conflict, Options)
+        alt Admin Approves (EIP-712)
+            Admin-->>Operator: Execution Authorized
+            Operator->>Vault: Dispatch Onchain Execution
+        alt Admin Cancels
+            Admin-->>Operator: Cancelled with Instructions
+        end
+    end
+```
+
+- **Reason Declaration**: The Treasury Sentinel cannot merely request fund transfers; it must submit its formal operational rationale (`declaredReason`).
+- **Dual-Tier Policy Validation**:
+  - **Mathematical Rules**: Hard programmatic limits (operating floor, safety multiplier, spend caps, hysteresis, payroll draw exclusion).
+  - **Declared Policies**: Human-prompted written rules (cost-center separation, vendor price hike tolerances, tax holdbacks).
+- **Tri-State Resolution**:
+  - `PERMIT`: Autonomous execution clearance.
+  - `DENY`: Hard invariant breach; execution blocked.
+  - `ESCALATE_TO_SPRS`: Escalates to human operator with full context and binary choice whenever a decision is ambiguous or when an out-of-bounds action carries a commercially sound, declared reason.
+
 
 
 

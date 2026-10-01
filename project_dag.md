@@ -5,6 +5,15 @@ The above preserves the document's structure. The actual **execution dependency 
 ```text
 D0
 │
+├── D0.B OnboardingAgent (Automated Business Discovery & Setup)
+│   ├── ERP / Document / App Ingestion (ERPNext, Odoo, Invoices, Contracts)
+│   ├── Cost-Center & Liability Discovery
+│   ├── Suggested Policy Generation (Math suggestions + Declared Policies)
+│   ├── Circle MPC Agent Wallet Provisioning on Arc L1
+│   ├── Vault Registration & ERC-20 Allowances
+│   ├── Spending Guardrail Hand-off (Terminal CLI OTP command)
+│   └── Activation Deposit Ingestion
+│
 ├── D1  Architecture + Environment Configuration
 │   ├── Dual-layer architecture
 │   ├── HACKATHON_DEMO policy
@@ -30,11 +39,12 @@ D4
 │
 └── D6 PostgreSQL Foundation
     ├── treasury_accounts
-    ├── account_liabilities
-    ├── vendor_master_registry
-    ├── permission_requests
+    ├── account_liabilities (Record 1: dynamic liabilities & recurring schedules)
+    ├── vendor_master_registry (Rule 3: payee protection)
+    ├── permission_requests (SPRS)
     ├── account_agent_audit_log
-    └── master_system_journal
+    ├── master_system_journal (cryptographic hash chain)
+    └── erp_sync_state (ERPNext / Odoo sync checkpoints)
 
 
 D6
@@ -47,19 +57,23 @@ D6
 │   ├── Account audit log
 │   └── Hash-chained master journal
 │
-├── D8 Account Intelligence Layer
+├── D8 Account Intelligence Layer (Record 2 + Tripartite Balance)
+│   ├── Parallel Tripartite Balance Model (BL + BY = BE)
+│   ├── Dynamic SafeToInvest & Liquidity Horizon
 │   └── get_account_intelligence()
 │
-└── D9 Liability Intelligence Layer
-    ├── AccountLiabilities
-    ├── recurring schedules
-    ├── vendor relationships
-    └── document-linked records
+└── D9 Liability Intelligence Layer (Record 1: ERP & Document Ingestion)
+    ├── ERP Connectors (ERPNext / Odoo REST & JSON-RPC)
+    ├── Programmatic Three-Way Match (PO + Delivery Receipt + Invoice)
+    ├── Vendor Master Lock (Payee substitution defense)
+    ├── Stealth price-hike detection (>15%)
+    ├── Recurring schedules & 48h pre-flight SPRS
+    └── Loud repair (refusing ERPNext 0.5 round-off sweeps)
 
 
 D8 + D9 + D3
 │
-└── D10 TreasurySentinelAgent
+└── D10 TreasurySentinelAgent (The Operator)
     │
     ├── D10.1 Balance event ingestion
     ├── D10.2 Debounce
@@ -69,14 +83,9 @@ D8 + D9 + D3
     ├── D10.6 TargetReserve
     ├── D10.7 SafeToInvest
     ├── D10.8 Hysteresis
-    └── D10.9 PolicyComplianceAgent check
+    └── D10.9 Reason-Bearing Intent Submission (Action + Amount + declaredReason)
               │
-              ├── INSIDE RULES
-              │     └── D11 Autonomous sweep
-              │           └── D7 LedgerWitness
-              │
-              └── OUTSIDE RULES
-                    └── D12 Human Gate / SPRS
+              └── D16 PolicyComplianceAgent Evaluation
 
 
 D9 + D10
@@ -94,10 +103,10 @@ D9 + D10
 D8 + D9 + D10
 │
 └── D14 Unified Asset Aggregator
-    ├── liquid USDC
-    ├── invested USYC
-    ├── total effective balance
-    ├── liabilities
+    ├── liquid USDC (BL)
+    ├── invested USYC (BY)
+    ├── total effective balance (BE = BL + BY)
+    ├── liabilities (Record 1)
     └── free capital
 
 
@@ -118,18 +127,22 @@ D14 + D3 + D12
             └── Allocation plan
 
 
-D15
+D15 + D10
 │
-└── D16 PolicyComplianceAgent
-    ├── Three-Way Match
-    ├── Vendor Master validation
-    ├── Payee substitution detection
-    ├── Amount/PO verification
-    ├── SPRS generation
-    └── Human approval where required
+└── D16 PolicyComplianceAgent (The Governance Gatekeeper & Enforcer)
+    ├── Dual-Tier Policy Evaluation:
+    │   ├── Mathematical Rules (Hard deterministic floors, spend caps, hysteresis)
+    │   └── Declared Policies (Human-prompted directives: cost-center rules, price hike limits)
+    ├── Reason-Bearing Intent Verification (Validates Treasury's declaredReason)
+    ├── Three Decision Outcomes:
+    │   ├── 1. PERMIT (Fast-path Clearance Code + Execution Token)
+    │   ├── 2. DENY (Hard invariant violation)
+    │   └── 3. ESCALATE_TO_SPRS (Hard/ambiguous decision OR outside rules with reasonable declared intent)
+    ├── SPRS Formulation (Proposal, declared reason, conflicting policy, binary options)
+    └── Human approval / EIP-712 verification
           │
           ├── REJECT/CANCEL
-          │   └── stop execution
+          │   └── stop execution + cancellation memo
           │
           └── APPROVE
               └── D17 authorize_transaction_intent()
@@ -144,19 +157,19 @@ D15
                               ├── EIP-712 threshold
                               └── payment
                                    │
-                                   └── D7 LedgerWitness
-                                        ├── verify receipt
-                                        ├── account logs
-                                        └── master journal
+                                   ├── D7 LedgerWitness (verify receipt, audit log, master journal)
+                                   └── D20.B ERP Reconciliation Syncer (write document-linked Payment Entry to Odoo/ERPNext)
 
 
-D11 + D13 + D19
+D11 + D13 + D19 + D20.B
 │
 └── D20 Unified Operational State
     ├── Liquid balance
     ├── Invested balance
     ├── Effective balance
-    ├── Liabilities
+    ├── Liabilities (Record 1)
+    ├── Safe-to-Invest Horizon (Record 2)
+    ├── ERP Sync Status
     ├── Audit state
     └── Transaction state
 
