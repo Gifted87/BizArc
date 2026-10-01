@@ -14,6 +14,18 @@ export * from "./agents/ledgerWitnessAgent.js";
 export * from "./agents/liabilityRadarAgent.js";
 export * from "./agents/treasurySentinelAgent.js";
 export * from "./agents/onboardingAgent.js";
+export * from "./llm/index.js";
+export * from "./memory/index.js";
+export * from "./context/index.js";
+export * from "./records/index.js";
+export * from "./tools/index.js";
+export * from "./agents/core/BaseLlmAgent.js";
+export * from "./agents/liabilityRadarLlmAgent.js";
+export * from "./agents/treasurySentinelLlmAgent.js";
+export * from "./agents/disbursalRouterLlmAgent.js";
+export * from "./agents/ledgerWitnessLlmAgent.js";
+export * from "./agents/onboardingLlmAgent.js";
+export * from "./agents/swarmCoordinator.js";
 
 // Convenience bootstrap function
 import { PolicyLoader } from "./config/policyLoader.js";
