@@ -16,7 +16,8 @@
     "test:d4d6": "tsx tests/d4_d5_d6.test.ts",
     "test:audit_d0": "tsx tests/audit_d0_real_world.test.ts",
     "test:d7": "tsx tests/d7_ledger_witness.test.ts",
-    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts && tsx tests/d3_contracts.test.ts && tsx tests/d0_semantic.test.ts && tsx tests/d4_d5_d6.test.ts && tsx tests/audit_d0_real_world.test.ts && tsx tests/d7_ledger_witness.test.ts"
+    "test:d8": "tsx tests/d8_account_intelligence.test.ts",
+    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts && tsx tests/d3_contracts.test.ts && tsx tests/d0_semantic.test.ts && tsx tests/d4_d5_d6.test.ts && tsx tests/audit_d0_real_world.test.ts && tsx tests/d7_ledger_witness.test.ts && tsx tests/d8_account_intelligence.test.ts"
   },
   "keywords": [],
   "author": "",

@@ -9,6 +9,7 @@ export * from "./database/index.js";
 export * from "./services/accountRegistrationService.js";
 export * from "./services/vendorMasterService.js";
 export * from "./services/yieldOptimizerService.js";
+export * from "./services/accountIntelligenceService.js";
 export * from "./agents/ledgerWitnessAgent.js";
 
 // Convenience bootstrap function
