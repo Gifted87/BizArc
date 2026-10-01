@@ -8,6 +8,8 @@ export * from "./contracts/index.js";
 export * from "./database/index.js";
 export * from "./services/accountRegistrationService.js";
 export * from "./services/vendorMasterService.js";
+export * from "./services/yieldOptimizerService.js";
+export * from "./agents/ledgerWitnessAgent.js";
 
 // Convenience bootstrap function
 import { PolicyLoader } from "./config/policyLoader.js";

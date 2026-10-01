@@ -64,6 +64,12 @@ async function runTests() {
   assert(connected, "PostgreSQL connection to 'bizarc' database is active and responsive");
 
   await runMigrations();
+  await DbClient.query("TRUNCATE TABLE master_system_journal CASCADE");
+  await DbClient.query("TRUNCATE TABLE account_agent_audit_log CASCADE");
+  await DbClient.query("TRUNCATE TABLE account_liabilities CASCADE");
+  await DbClient.query("TRUNCATE TABLE permission_requests CASCADE");
+  await DbClient.query("TRUNCATE TABLE vendor_master_registry CASCADE");
+  await DbClient.query("TRUNCATE TABLE treasury_accounts CASCADE");
   assert(true, "Migration runner executed schema.sql without error");
 
   // ──────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
-import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
+import circleWalletsPkg from "@circle-fin/developer-controlled-wallets";
+const { initiateDeveloperControlledWalletsClient } = (circleWalletsPkg as any).default ?? circleWalletsPkg;
 import { WalletExecutionRequest, WalletExecutionResult } from "./types.js";
 
 export interface CircleWalletConfig {
