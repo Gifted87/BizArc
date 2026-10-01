@@ -12,6 +12,7 @@ export * from "./services/yieldOptimizerService.js";
 export * from "./services/accountIntelligenceService.js";
 export * from "./agents/ledgerWitnessAgent.js";
 export * from "./agents/liabilityRadarAgent.js";
+export * from "./agents/treasurySentinelAgent.js";
 
 // Convenience bootstrap function
 import { PolicyLoader } from "./config/policyLoader.js";

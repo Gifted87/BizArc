@@ -46,7 +46,7 @@ export interface AssociatedDocumentRecords {
 }
 
 export interface SPROption {
-  action: "APPROVE" | "CANCEL_WITH_INSTRUCTIONS";
+  action: "APPROVE" | "CANCEL_WITH_INSTRUCTIONS" | "REJECT";
   label: string;
   requiresText?: boolean;
 }
