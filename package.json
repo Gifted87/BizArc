@@ -16,10 +16,12 @@
     "test:d4d6": "tsx tests/d4_d5_d6.test.ts",
     "test:audit_d0": "tsx tests/audit_d0_real_world.test.ts",
     "test:d7": "tsx tests/d7_ledger_witness.test.ts",
+    "test:audit_d7": "tsx tests/audit_d7_real_world.test.ts",
     "test:d8": "tsx tests/d8_account_intelligence.test.ts",
+    "test:audit_d8": "tsx tests/audit_d8_real_world.test.ts",
     "test:d9": "tsx tests/d9_liability_radar.test.ts",
     "test:audit_d9": "tsx tests/audit_d9_real_world.test.ts",
-    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts && tsx tests/d3_contracts.test.ts && tsx tests/d0_semantic.test.ts && tsx tests/d4_d5_d6.test.ts && tsx tests/audit_d0_real_world.test.ts && tsx tests/d7_ledger_witness.test.ts && tsx tests/d8_account_intelligence.test.ts && tsx tests/d9_liability_radar.test.ts && tsx tests/audit_d9_real_world.test.ts"
+    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts && tsx tests/d3_contracts.test.ts && tsx tests/d0_semantic.test.ts && tsx tests/d4_d5_d6.test.ts && tsx tests/audit_d0_real_world.test.ts && tsx tests/audit_d7_real_world.test.ts && tsx tests/audit_d8_real_world.test.ts && tsx tests/audit_d9_real_world.test.ts"
   },
   "keywords": [],
   "author": "",

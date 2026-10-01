@@ -78,6 +78,7 @@ export interface WaterfallCandidatePlan {
   }>;
   totalAvailableUsdc: number;
   isFullyFundable: boolean;
+  shortfallUsdc?: number;
 }
 
 export class AccountIntelligenceService {
@@ -358,11 +359,13 @@ export class AccountIntelligenceService {
       }
     }
 
+    const isFullyFundable = remainingNeeded <= 0.0000001;
     return {
       eligibleAccounts,
       allocationPlan,
       totalAvailableUsdc: Number(totalAvailableUsdc.toFixed(6)),
-      isFullyFundable: remainingNeeded <= 0.0000001,
+      isFullyFundable,
+      shortfallUsdc: isFullyFundable ? undefined : Number(remainingNeeded.toFixed(6)),
     };
   }
 }
