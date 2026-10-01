@@ -19,6 +19,7 @@ describe("D0.B OnboardingAgent & D0-D3 Foundation Real-World Audit", () => {
     await pool.query("DELETE FROM permission_requests;");
     await pool.query("DELETE FROM account_liabilities;");
     await pool.query("DELETE FROM vendor_master_registry;");
+    await pool.query("DELETE FROM erp_sync_state;");
     await pool.query("DELETE FROM treasury_accounts;");
 
     onboardingAgent = new OnboardingAgent();

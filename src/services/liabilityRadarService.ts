@@ -7,6 +7,7 @@ import { VendorMasterRepo } from "../database/repos/vendorMasterRepo.js";
 import { PermissionRequestRepo } from "../database/repos/permissionRequestRepo.js";
 import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
 import { AccountIntelligenceService } from "./accountIntelligenceService.js";
+import { LoudRoundingError } from "../foundation/usdc/usdcService.js";
 
 export interface InboundLiabilityDocumentInput {
   accountId: string;
@@ -19,6 +20,8 @@ export interface InboundLiabilityDocumentInput {
   frequencyCron?: string;
   rawDocumentContent?: string;
   poHash?: `0x${string}`;
+  erpRoundOffAmount?: number;
+  roundOffSweepDetected?: boolean;
 }
 
 export interface IngestionResult {
@@ -77,6 +80,13 @@ export class LiabilityRadarService {
   public async ingestLiabilityDocument(
     input: InboundLiabilityDocumentInput
   ): Promise<IngestionResult> {
+    // Rule 5: Refusal of ERPNext 0.5 Round-Off Sweeps (Loud Repair)
+    if (input.roundOffSweepDetected || (input.erpRoundOffAmount && input.erpRoundOffAmount > 0)) {
+      throw new LoudRoundingError(
+        `LOUD REPAIR REFUSAL: ERPNext 0.5 round-off sweep detected (${input.erpRoundOffAmount || 0} USDC). Silent rounding sweeps into expense accounts are strictly prohibited on Arc L1.`
+      );
+    }
+
     this.validateUsdcPrecision(input.amountUsdc);
 
     const docContent = input.rawDocumentContent ?? `${input.vendorId}|${input.title}|${input.amountUsdc}|${input.dueDate}`;

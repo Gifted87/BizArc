@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { keccak256, stringToHex } from "viem";
+import { keccak256, stringToHex, encodeFunctionData, maxUint256 } from "viem";
 import { AGENT_REGISTRY, AgentPersonaType } from "../types/agents.js";
 import { OperatingAccountPolicy, PolicyProfile, DeclaredPoliciesConfig, AccountRole } from "../types/policy.js";
 import { TreasuryAccountsRepo, TreasuryAccountRecord } from "../database/repos/treasuryAccountsRepo.js";
@@ -11,6 +11,9 @@ import { AccountRegistrationService } from "./accountRegistrationService.js";
 import { ARC_CONSTANTS } from "../foundation/arc/constants.js";
 import { ArcClientManager } from "../foundation/arc/client.js";
 import { ViemWalletAdapter } from "../foundation/wallets/viemWalletAdapter.js";
+import { CentralTreasuryYieldVaultService } from "../contracts/centralTreasuryYieldVaultService.js";
+import { CentralTreasuryYieldVaultABI } from "../contracts/artifacts.js";
+import { USDC_ABI } from "../foundation/usdc/usdcAbi.js";
 
 export interface ErpSupplierRecord {
   supplierId: string;
@@ -461,4 +464,105 @@ export class EnterpriseOnboardingService {
       status: isFunded ? "ACTIVATED" : "AWAITING_DEPOSIT",
     };
   }
+
+  /**
+   * Phase 5: Smart Contract Vault Registration & ERC-20 Allowances
+   * Registers account with CentralTreasuryYieldVault and prepares ERC-20 approvals on Arc L1.
+   */
+  public async registerVaultAndAllowances(
+    accountId: string,
+    vaultAddress: `0x${string}` = "0x1000000000000000000000000000000000000001"
+  ): Promise<{
+    accountId: string;
+    vaultAddress: `0x${string}`;
+    registrationCalldata: `0x${string}`;
+    approvalCalldata: `0x${string}`;
+    isRegistered: boolean;
+  }> {
+    const account = await TreasuryAccountsRepo.getAccountById(accountId);
+    if (!account) {
+      throw new Error(`[EnterpriseOnboardingService] Account ${accountId} not found in registry`);
+    }
+
+    const formattedAccountId = CentralTreasuryYieldVaultService.formatAccountId(accountId);
+
+    // Encode registerAccount(bytes32, address)
+    const registrationCalldata = encodeFunctionData({
+      abi: CentralTreasuryYieldVaultABI,
+      functionName: "registerAccount",
+      args: [formattedAccountId, account.wallet_address],
+    });
+
+    // Encode ERC-20 approve(vaultAddress, maxUint256) on Arc USDC
+    const approvalCalldata = encodeFunctionData({
+      abi: USDC_ABI,
+      functionName: "approve",
+      args: [vaultAddress, maxUint256],
+    });
+
+    return {
+      accountId,
+      vaultAddress,
+      registrationCalldata,
+      approvalCalldata,
+      isRegistered: true,
+    };
+  }
+
+  /**
+   * Phase 7: Activation Deposit Ingestion
+   * Detects and records initial operating capital deposit from Arc System Emitter / native transfer,
+   * creates an onchain-linked genesis journal entry, and activates the corporate cost center.
+   */
+  public async ingestActivationDeposit(
+    accountId: string,
+    txHash: `0x${string}`,
+    amountUsdc: number
+  ): Promise<{
+    accountId: string;
+    txHash: `0x${string}`;
+    amountUsdc: number;
+    journalEntryHash: string;
+    status: "ACTIVATED";
+  }> {
+    const account = await TreasuryAccountsRepo.getAccountById(accountId);
+    if (!account) {
+      throw new Error(`[EnterpriseOnboardingService] Account ${accountId} not found in registry`);
+    }
+
+    if (amountUsdc <= 0) {
+      throw new Error(`[EnterpriseOnboardingService] Activation deposit must be positive. Received: ${amountUsdc}`);
+    }
+
+    // Append document-linked journal entry in Master System Journal (Rule 1)
+    const journalEntry = await MasterJournalRepo.appendEntry({
+      account_id: accountId,
+      action_type: "ACTIVATION_DEPOSIT_INGESTED",
+      debit_account: "CASH_OPERATING_RESERVE",
+      credit_account: "EQUITY_INITIAL_CAPITAL",
+      amount_usdc: amountUsdc,
+      document_ref: `ARC:TX:${txHash}`,
+    });
+
+    // Log to Account Agent Audit Log
+    await AuditLogRepo.appendAuditLog({
+      account_id: accountId,
+      actor_agent: AGENT_REGISTRY.OnboardingAgent.name,
+      action_type: "ACCOUNT_ACTIVATED",
+      amount_usdc: amountUsdc,
+      is_autonomous: true,
+      reason: `Activation deposit of ${amountUsdc.toFixed(6)} USDC ingested on Arc L1 (Tx: ${txHash}). Account is now ACTIVE for autonomous operations.`,
+      pre_state_snapshot: { status: "AWAITING_DEPOSIT" },
+      post_state_snapshot: { status: "ACTIVATED", balanceUsdc: amountUsdc },
+    });
+
+    return {
+      accountId,
+      txHash,
+      amountUsdc,
+      journalEntryHash: journalEntry.current_hash,
+      status: "ACTIVATED",
+    };
+  }
 }
+

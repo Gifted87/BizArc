@@ -6,3 +6,4 @@ export * from "./repos/vendorMasterRepo.js";
 export * from "./repos/permissionRequestRepo.js";
 export * from "./repos/auditLogRepo.js";
 export * from "./repos/masterJournalRepo.js";
+export * from "./repos/erpSyncRepo.js";

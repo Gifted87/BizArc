@@ -189,3 +189,24 @@ CREATE TABLE IF NOT EXISTS dynamic_safe_to_invest (
 CREATE INDEX IF NOT EXISTS idx_safe_to_invest_account ON dynamic_safe_to_invest(account_id);
 CREATE INDEX IF NOT EXISTS idx_safe_to_invest_created ON dynamic_safe_to_invest(created_at DESC);
 
+-- ======================================================================================
+-- 11. ERP Sync State (ERPNext / Odoo Sync Checkpoints)
+-- Tracks synchronization checkpoints, last synced document IDs, and status for ERPs
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS erp_sync_state (
+    sync_id VARCHAR(64) PRIMARY KEY,
+    system_type VARCHAR(32) NOT NULL, -- 'ERPNEXT', 'ODOO'
+    account_id VARCHAR(64) REFERENCES treasury_accounts(account_id) ON DELETE CASCADE,
+    entity_type VARCHAR(64) NOT NULL, -- 'PURCHASE_INVOICE', 'PAYMENT_ENTRY', 'PURCHASE_ORDER', 'STOCK_PICKING'
+    last_sync_timestamp TIMESTAMPTZ NOT NULL,
+    last_synced_document_id VARCHAR(128),
+    sync_checkpoint_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status VARCHAR(32) NOT NULL DEFAULT 'SYNCED', -- 'SYNCED', 'SYNCING', 'FAILED'
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_erp_sync_system ON erp_sync_state(system_type, entity_type);
+CREATE INDEX IF NOT EXISTS idx_erp_sync_account ON erp_sync_state(account_id);
+
+
