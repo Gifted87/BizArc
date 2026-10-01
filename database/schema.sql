@@ -96,9 +96,10 @@ CREATE TABLE IF NOT EXISTS master_system_journal (
     credit_account VARCHAR(128) NOT NULL,
     amount_usdc NUMERIC(18, 6) NOT NULL,
     document_ref VARCHAR(128) NOT NULL,
-    previous_hash VARCHAR(64) NOT NULL,
-    current_hash VARCHAR(64) NOT NULL
+    previous_hash VARCHAR(66) NOT NULL,
+    current_hash VARCHAR(66) NOT NULL
 );
+
 
 CREATE INDEX IF NOT EXISTS idx_journal_sequence ON master_system_journal(sequence_id);
 CREATE INDEX IF NOT EXISTS idx_journal_account ON master_system_journal(account_id);

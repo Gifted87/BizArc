@@ -265,7 +265,7 @@ export class AccountIntelligenceService {
         isActive: account.is_active,
         minOperatingFloorUsdc: account.min_operating_floor_usdc,
         safetyBufferRatio: account.safety_buffer_ratio,
-        excludeFromWaterfall: accountPolicy?.exclude_from_waterfall_draws ?? false,
+        excludeFromWaterfall: account.role === "PAYROLL" || (accountPolicy?.exclude_from_waterfall_draws ?? false),
         maxAutonomousSweepLimit: accountPolicy?.max_autonomous_sweep_limit,
       },
       balances: {

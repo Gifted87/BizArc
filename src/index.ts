@@ -23,6 +23,7 @@ export * from "./agents/core/BaseLlmAgent.js";
 export * from "./agents/liabilityRadarLlmAgent.js";
 export * from "./agents/treasurySentinelLlmAgent.js";
 export * from "./agents/disbursalRouterLlmAgent.js";
+export * from "./agents/policyComplianceLlmAgent.js";
 export * from "./agents/ledgerWitnessLlmAgent.js";
 export * from "./agents/onboardingLlmAgent.js";
 export * from "./agents/swarmCoordinator.js";

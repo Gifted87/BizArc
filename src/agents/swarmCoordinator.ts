@@ -7,6 +7,7 @@ import { DisbursalRouterLlmAgent } from "./disbursalRouterLlmAgent.js";
 import { LedgerWitnessLlmAgent } from "./ledgerWitnessLlmAgent.js";
 import { LiabilityRadarLlmAgent } from "./liabilityRadarLlmAgent.js";
 import { OnboardingLlmAgent } from "./onboardingLlmAgent.js";
+import { PolicyComplianceLlmAgent } from "./policyComplianceLlmAgent.js";
 import { TreasurySentinelLlmAgent } from "./treasurySentinelLlmAgent.js";
 
 export class SwarmCoordinator {
@@ -22,6 +23,7 @@ export class SwarmCoordinator {
   public readonly sentinelAgent: TreasurySentinelLlmAgent;
   public readonly radarAgent: LiabilityRadarLlmAgent;
   public readonly routerAgent: DisbursalRouterLlmAgent;
+  public readonly complianceAgent: PolicyComplianceLlmAgent;
   public readonly witnessAgent: LedgerWitnessLlmAgent;
 
   constructor(params?: {
@@ -52,8 +54,10 @@ export class SwarmCoordinator {
     this.sentinelAgent = new TreasurySentinelLlmAgent(agentDeps);
     this.radarAgent = new LiabilityRadarLlmAgent(agentDeps);
     this.routerAgent = new DisbursalRouterLlmAgent(agentDeps);
+    this.complianceAgent = new PolicyComplianceLlmAgent(agentDeps);
     this.witnessAgent = new LedgerWitnessLlmAgent(agentDeps);
   }
+
 
   /**
    * Initializes the swarm: seeds enterprise vector memory, verified vendors, and initial accounts.

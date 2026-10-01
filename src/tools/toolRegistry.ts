@@ -1,7 +1,12 @@
+import crypto from "crypto";
 import { DbClient } from "../database/dbClient.js";
 import { LlmToolDefinition } from "../llm/types.js";
 import { VectorMemoryService } from "../memory/vectorMemoryService.js";
 import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
+import { AccountIntelligenceService } from "../services/accountIntelligenceService.js";
+import { CentralTreasuryYieldVaultService } from "../contracts/centralTreasuryYieldVaultService.js";
+import { DisbursalVaultService } from "../contracts/disbursalVaultService.js";
+import { PolicyComplianceLlmAgent } from "../agents/policyComplianceLlmAgent.js";
 
 export interface ToolExecutionResult {
   success: boolean;
@@ -12,14 +17,22 @@ export interface ToolExecutionResult {
 export class ToolRegistry {
   private vectorMemory: VectorMemoryService;
   private dynamicRecords: DynamicRecordsService;
+  private accountIntelligence: AccountIntelligenceService;
+  private complianceAgent?: PolicyComplianceLlmAgent;
+  private executedIdempotencyKeys: Set<string> = new Set();
 
   constructor(
     vectorMemory?: VectorMemoryService,
-    dynamicRecords?: DynamicRecordsService
+    dynamicRecords?: DynamicRecordsService,
+    accountIntelligence?: AccountIntelligenceService,
+    complianceAgent?: PolicyComplianceLlmAgent
   ) {
     this.vectorMemory = vectorMemory || new VectorMemoryService();
     this.dynamicRecords = dynamicRecords || new DynamicRecordsService();
+    this.accountIntelligence = accountIntelligence || new AccountIntelligenceService();
+    this.complianceAgent = complianceAgent;
   }
+
 
   /**
    * Returns tool definitions formatted for LLM function calling schemas.
@@ -111,6 +124,38 @@ export class ToolRegistry {
       {
         type: "function",
         function: {
+          name: "evaluate_reason_bearing_intent",
+          description: "Policy Compliance Gate (ID #104): Submit reason-bearing intent for Tri-State evaluation (PERMIT, DENY, ESCALATE_TO_SPRS).",
+          parameters: {
+            type: "object",
+            properties: {
+              proposedAction: { type: "string", description: "Action type (e.g. 'AUTONOMOUS_SWEEP', 'DISBURSAL_SETTLEMENT')" },
+              accountId: { type: "string", description: "Source account identifier" },
+              amountUsdc: { type: "string", description: "Exact 6-decimal USDC amount" },
+              declaredReason: { type: "string", description: "Explicit operational and commercial rationale" },
+              recipientAddress: { type: "string", description: "Optional destination address" },
+            },
+            required: ["proposedAction", "accountId", "amountUsdc", "declaredReason"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "plan_waterfall_allocation",
+          description: "Evaluate multi-account waterfall allocation for large obligations across active operating accounts, strictly protecting payroll.",
+          parameters: {
+            type: "object",
+            properties: {
+              requiredAmountUsdc: { type: "number", description: "Total USDC amount required for payment" },
+            },
+            required: ["requiredAmountUsdc"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
           name: "sweep_excess_liquidity",
           description: "Sweep excess idle USDC above target operating buffer into ERC-4626 USYC tokenized short-term US Treasury yield vault on Arc L1.",
           parameters: {
@@ -118,6 +163,7 @@ export class ToolRegistry {
             properties: {
               accountId: { type: "string", description: "Account identifier" },
               amountUsdc: { type: "string", description: "Exact 6-decimal amount to sweep" },
+              clearanceCode: { type: "string", description: "Compliance clearance code from PolicyComplianceAgent" },
             },
             required: ["accountId", "amountUsdc"],
           },
@@ -143,7 +189,7 @@ export class ToolRegistry {
         type: "function",
         function: {
           name: "execute_disbursal",
-          description: "Execute staged payment via DisbursalVault on Arc L1 after policy limit and idempotency verification.",
+          description: "Execute staged payment via DisbursalVault on Arc L1 with cryptographic Keccak-256 idempotency verification.",
           parameters: {
             type: "object",
             properties: {
@@ -151,6 +197,7 @@ export class ToolRegistry {
               liabilityId: { type: "string", description: "Liability record identifier" },
               amountUsdc: { type: "string", description: "Exact 6-decimal payment amount" },
               recipientAddress: { type: "string", description: "Recipient wallet address" },
+              invoiceId: { type: "string", description: "Vendor invoice number for idempotency key derivation" },
             },
             required: ["accountId", "liabilityId", "amountUsdc", "recipientAddress"],
           },
@@ -160,7 +207,7 @@ export class ToolRegistry {
         type: "function",
         function: {
           name: "post_document_linked_gl",
-          description: "Golden Rule 1: Post document-linked general ledger entry to ERP (Odoo/ERPNext) and sequential hash-linked master journal.",
+          description: "Golden Rule 1 & 4: Post document-linked general ledger entry to ERP (Odoo/ERPNext) and sequential cryptographic hash-chained master journal.",
           parameters: {
             type: "object",
             properties: {
@@ -359,9 +406,56 @@ export class ToolRegistry {
           };
         }
 
+        case "evaluate_reason_bearing_intent": {
+          if (!this.complianceAgent) {
+            this.complianceAgent = new PolicyComplianceLlmAgent({ toolRegistry: this });
+          }
+          const evalResult = await this.complianceAgent.evaluateIntent({
+            proposedAction: args.proposedAction,
+            accountId: args.accountId,
+            amountUsdc: args.amountUsdc,
+            declaredReason: args.declaredReason,
+            recipientAddress: args.recipientAddress,
+          });
+
+          return {
+            success: evalResult.decision !== "DENY",
+            data: evalResult,
+            error: evalResult.decision === "DENY" ? evalResult.reason : undefined,
+          };
+        }
+
+        case "plan_waterfall_allocation": {
+          const candidatePlan = await this.accountIntelligence.getWaterfallCandidateAccounts(
+            args.requiredAmountUsdc
+          );
+
+          return {
+            success: true,
+            data: {
+              totalAvailableUsdc: candidatePlan.totalAvailableUsdc,
+              isFullyFundable: candidatePlan.isFullyFundable,
+              allocationPlan: candidatePlan.allocationPlan,
+              eligibleAccountsCount: candidatePlan.eligibleAccounts.length,
+              shortfallUsdc: candidatePlan.shortfallUsdc,
+            },
+          };
+        }
+
         case "sweep_excess_liquidity": {
           const { accountId, amountUsdc } = args;
-          // Record state mutation
+          const rawAmount = this.dynamicRecords.parseUsdcToRaw(amountUsdc);
+          
+          // Smart Contract Payload Encoding via CentralTreasuryYieldVaultService
+          const vaultAddress: `0x${string}` = "0x4444444444444444444444444444444444444444";
+          const dummyWallet: `0x${string}` = "0x9999999999999999999999999999999999999999";
+          const encodedCall = CentralTreasuryYieldVaultService.prototype.encodeSweepFromAccount.call(
+            null,
+            accountId,
+            dummyWallet,
+            rawAmount
+          );
+
           const txHash = `0xarc_${Date.now().toString(16)}_sweep`;
           return {
             success: true,
@@ -370,7 +464,8 @@ export class ToolRegistry {
               action: "SWEEP_TO_USYC",
               accountId,
               amountUsdc,
-              yieldVault: "0x4444444444444444444444444444444444444444",
+              vaultAddress,
+              encodedFunctionCall: encodedCall,
               blockNumber: 104201,
             },
           };
@@ -378,6 +473,13 @@ export class ToolRegistry {
 
         case "recall_invested_liquidity": {
           const { accountId, amountUsdc, reason } = args;
+          const rawAmount = this.dynamicRecords.parseUsdcToRaw(amountUsdc);
+          const encodedRecall = CentralTreasuryYieldVaultService.prototype.encodeRecallForAccount.call(
+            null,
+            accountId,
+            rawAmount
+          );
+
           const txHash = `0xarc_${Date.now().toString(16)}_recall`;
           return {
             success: true,
@@ -387,18 +489,38 @@ export class ToolRegistry {
               accountId,
               amountUsdc,
               reason,
+              encodedFunctionCall: encodedRecall,
               blockNumber: 104202,
             },
           };
         }
 
         case "execute_disbursal": {
-          const { accountId, liabilityId, amountUsdc, recipientAddress } = args;
-          const txHash = `0xarc_${Date.now().toString(16)}_disburse`;
+          const { accountId, liabilityId, amountUsdc, recipientAddress, invoiceId = "INV-DEFAULT" } = args;
+          const rawAmount = this.dynamicRecords.parseUsdcToRaw(amountUsdc);
+
+          // Compute deterministic Keccak-256 idempotency key per DisbursalVault.sol:
+          // idempotencyKey = keccak256(abi.encodePacked(vendor, invoiceId, amount))
+          const idempotencyKey = DisbursalVaultService.generateIdempotencyKey(
+            recipientAddress as `0x${string}`,
+            invoiceId,
+            rawAmount
+          );
+
+          // Strict Idempotency Check: Reject duplicate payment execution (Rule 1 & Rule 4)
+          if (this.executedIdempotencyKeys.has(idempotencyKey)) {
+            return {
+              success: false,
+              error: `IDEMPOTENCY DUPLICATE DETECTED: Payment with key ${idempotencyKey} has already executed! Double payment blocked.`,
+            };
+          }
+
+          this.executedIdempotencyKeys.add(idempotencyKey);
 
           // Update liability status in Record 1
           await this.dynamicRecords.updateLiabilityStatus(liabilityId, "DISBURSED");
 
+          const txHash = `0xarc_${Date.now().toString(16)}_disburse`;
           return {
             success: true,
             data: {
@@ -408,6 +530,7 @@ export class ToolRegistry {
               liabilityId,
               amountUsdc,
               recipientAddress,
+              idempotencyKey,
               vaultAddress: "0x5555555555555555555555555555555555555555",
               status: "SETTLED",
             },
@@ -416,19 +539,34 @@ export class ToolRegistry {
 
         case "post_document_linked_gl": {
           const { accountId, documentRef, debitAccount, creditAccount, amountUsdc, txHash } = args;
+
+          // 1. Fetch previous hash from master system journal to build unbreakable cryptographic hash chain
+          const prevRes = await DbClient.query(
+            `SELECT sequence_id, current_hash FROM master_system_journal ORDER BY sequence_id DESC LIMIT 1;`
+          );
+
+          const previousHash = prevRes.rows.length > 0 ? prevRes.rows[0].current_hash : "0x0000000000000000000000000000000000000000000000000000000000000000";
+          const nextSeq = prevRes.rows.length > 0 ? parseInt(prevRes.rows[0].sequence_id, 10) + 1 : 1;
+
+          // Compute Cryptographic SHA-256 Hash Chain: H_n = SHA256(H_{n-1} + seq + account + amount + ref + tx)
+          const hashPayload = `${previousHash}:${nextSeq}:${accountId}:${amountUsdc}:${documentRef}:${txHash}`;
+          const currentHash = "0x" + crypto.createHash("sha256").update(hashPayload).digest("hex");
+
           // Insert into master system journal (Rule 1 & Rule 4)
           const journalRes = await DbClient.query(
             `INSERT INTO master_system_journal 
               (account_id, action_type, debit_account, credit_account, amount_usdc, document_ref, previous_hash, current_hash)
-             VALUES ($1, 'DISBURSAL_SETTLEMENT', $2, $3, $4, $5, '0xprev_journal_hash', $6)
+             VALUES ($1, 'DISBURSAL_SETTLEMENT', $2, $3, $4, $5, $6, $7)
              RETURNING sequence_id, timestamp;`,
-            [accountId, debitAccount, creditAccount, amountUsdc, documentRef, txHash]
+            [accountId, debitAccount, creditAccount, amountUsdc, documentRef, previousHash, currentHash]
           );
 
           return {
             success: true,
             data: {
               journalSequence: journalRes.rows[0].sequence_id,
+              previousHash,
+              currentHash,
               documentRef,
               erpSyncStatus: "POSTED_TO_ODOO_AND_ERPNEXT",
               timestamp: journalRes.rows[0].timestamp,
