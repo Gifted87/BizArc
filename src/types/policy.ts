@@ -51,9 +51,10 @@ export interface PolicyProfile {
 
 export interface BusinessPolicyConfig {
   version: string;
-  active_profile: "HACKATHON_DEMO" | "PRODUCTION";
+  active_profile: "PRODUCTION_TESTNET" | "PRODUCTION" | "HACKATHON_DEMO";
   profiles: {
-    HACKATHON_DEMO: PolicyProfile;
+    PRODUCTION_TESTNET?: PolicyProfile;
     PRODUCTION: PolicyProfile;
+    HACKATHON_DEMO: PolicyProfile;
   };
 }

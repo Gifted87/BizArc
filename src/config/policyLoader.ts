@@ -35,7 +35,7 @@ export class PolicyLoader {
   }
 
   public static getActiveProfile(filePath?: string): {
-    profileName: "HACKATHON_DEMO" | "PRODUCTION";
+    profileName: "PRODUCTION_TESTNET" | "PRODUCTION" | "HACKATHON_DEMO";
     profile: PolicyProfile;
   } {
     const config = this.loadConfig(filePath);
@@ -60,21 +60,24 @@ export class PolicyLoader {
       throw new PolicyValidationError("Missing 'version' in policy configuration.");
     }
 
-    if (!["HACKATHON_DEMO", "PRODUCTION"].includes(config.active_profile)) {
+    if (!["PRODUCTION_TESTNET", "PRODUCTION", "HACKATHON_DEMO"].includes(config.active_profile)) {
       throw new PolicyValidationError(
-        `Invalid active_profile '${config.active_profile}'. Must be 'HACKATHON_DEMO' or 'PRODUCTION'.`
+        `Invalid active_profile '${config.active_profile}'. Must be 'PRODUCTION_TESTNET', 'PRODUCTION', or 'HACKATHON_DEMO'.`
       );
     }
 
-    if (!config.profiles || !config.profiles.HACKATHON_DEMO || !config.profiles.PRODUCTION) {
+    if (!config.profiles || !config.profiles.PRODUCTION || !config.profiles.HACKATHON_DEMO) {
       throw new PolicyValidationError(
-        "Profiles must include both 'HACKATHON_DEMO' and 'PRODUCTION'."
+        "Profiles must include both 'PRODUCTION' and 'HACKATHON_DEMO'."
       );
     }
 
-    // Validate each profile
-    this.validateProfile("HACKATHON_DEMO", config.profiles.HACKATHON_DEMO);
+    // Validate each profile present
+    if (config.profiles.PRODUCTION_TESTNET) {
+      this.validateProfile("PRODUCTION_TESTNET", config.profiles.PRODUCTION_TESTNET);
+    }
     this.validateProfile("PRODUCTION", config.profiles.PRODUCTION);
+    this.validateProfile("HACKATHON_DEMO", config.profiles.HACKATHON_DEMO);
   }
 
   private static validateProfile(name: string, profile: PolicyProfile): void {
