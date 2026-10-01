@@ -72,6 +72,18 @@ profiles:
     spending_limits:
       daily_hard_cap_usdc: 5000.00
       single_tx_human_gate_threshold_usdc: 500.00
+
+    declared_policies:
+      cost_center_rules:
+        - "Never pay cloud infrastructure or tooling invoices from marketing or payroll accounts."
+        - "Corporate payroll is reserved exclusively for salary disbursements and contractor payouts."
+      anomaly_tolerances:
+        max_price_hike_percentage: 15.0 # Flag any renewal increasing > 15%
+        flag_unregistered_vendors: true
+        require_three_way_match: true
+      liquidity_overrides:
+        - "If vendor invoice due within 48 hours, USYC recall takes precedence over maintaining reserve."
+      tax_holdback_percentage: 15.0 # Hold 15% of incoming gross revenue in liquid reserve
   HACKATHON_DEMO:
     description: "Calibrated for small testnet faucet balances ($10 - $50 USDC) with rapid execution"
     operating_accounts:

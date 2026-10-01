@@ -42,11 +42,34 @@ export interface SpendingLimitsPolicy {
   single_tx_human_gate_threshold_usdc: number;
 }
 
+export interface DeclaredPolicyRule {
+  rule_id: string;
+  category: "COST_CENTER_INTEGRITY" | "ANOMALY_TOLERANCE" | "LIQUIDITY_URGENCY" | "TAX_HOLDBACK" | "GENERAL";
+  description: string;
+  instruction: string;
+  is_active: boolean;
+  defined_by: "HUMAN_OPERATOR" | "SUGGESTED_BY_AGENT";
+  created_at: string;
+}
+
+export interface DeclaredPoliciesConfig {
+  cost_center_rules?: string[];
+  anomaly_tolerances?: {
+    max_price_hike_percentage?: number; // e.g. 15 for 15%
+    flag_unregistered_vendors?: boolean;
+    require_three_way_match?: boolean;
+  };
+  liquidity_overrides?: string[];
+  tax_holdback_percentage?: number; // e.g. 15 for 15%
+  custom_rules?: DeclaredPolicyRule[];
+}
+
 export interface PolicyProfile {
   description: string;
   operating_accounts: OperatingAccountPolicy[];
   investment_rules: InvestmentRulesPolicy;
   spending_limits: SpendingLimitsPolicy;
+  declared_policies?: DeclaredPoliciesConfig;
 }
 
 export interface BusinessPolicyConfig {

@@ -143,6 +143,25 @@ export class PolicyLoader {
         `Profile '${name}': single_tx_human_gate_threshold_usdc (${sp.single_tx_human_gate_threshold_usdc}) cannot exceed daily_hard_cap_usdc (${sp.daily_hard_cap_usdc}).`
       );
     }
+
+    // Declared Policies validation (Rule: Human defined directives)
+    if (profile.declared_policies) {
+      const dp = profile.declared_policies;
+      if (dp.tax_holdback_percentage !== undefined) {
+        if (dp.tax_holdback_percentage < 0 || dp.tax_holdback_percentage > 100) {
+          throw new PolicyValidationError(
+            `Profile '${name}': tax_holdback_percentage must be between 0 and 100.`
+          );
+        }
+      }
+      if (dp.anomaly_tolerances?.max_price_hike_percentage !== undefined) {
+        if (dp.anomaly_tolerances.max_price_hike_percentage < 0) {
+          throw new PolicyValidationError(
+            `Profile '${name}': max_price_hike_percentage cannot be negative.`
+          );
+        }
+      }
+    }
   }
 
   public static clearCache(): void {

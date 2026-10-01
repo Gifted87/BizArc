@@ -1,4 +1,5 @@
 export type AgentPersonaType =
+  | "OnboardingAgent"
   | "TreasurySentinelAgent"
   | "LiabilityRadarAgent"
   | "DisbursalRouterAgent"
@@ -14,6 +15,13 @@ export interface AgentDescriptor {
 }
 
 export const AGENT_REGISTRY: Record<AgentPersonaType, AgentDescriptor> = {
+  OnboardingAgent: {
+    name: "OnboardingAgent",
+    erc8004Id: 100,
+    description: "Automated Business Discovery, Policy Synthesizer & Account Provisioner",
+    canSignTransactions: true,
+    canWriteLedger: false,
+  },
   TreasurySentinelAgent: {
     name: "TreasurySentinelAgent",
     erc8004Id: 101,

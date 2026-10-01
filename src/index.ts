@@ -13,6 +13,7 @@ export * from "./services/accountIntelligenceService.js";
 export * from "./agents/ledgerWitnessAgent.js";
 export * from "./agents/liabilityRadarAgent.js";
 export * from "./agents/treasurySentinelAgent.js";
+export * from "./agents/onboardingAgent.js";
 
 // Convenience bootstrap function
 import { PolicyLoader } from "./config/policyLoader.js";
