@@ -106,9 +106,35 @@ export class DynamicRecordsService {
     liveLiquidRaw?: bigint,
     liveInvestedRaw?: bigint
   ): Promise<ParallelTripartiteBalance> {
-    // If not provided, fetch current account defaults or simulate onchain balance
-    const liquidRaw = liveLiquidRaw !== undefined ? liveLiquidRaw : 100000000000n; // 100,000.000000 USDC
-    const investedRaw = liveInvestedRaw !== undefined ? liveInvestedRaw : 50000000000n; // 50,000.000000 USDC
+    // If not provided, fetch current account balance from dynamic records or fallback to defaults
+    let liquidRaw = liveLiquidRaw;
+    let investedRaw = liveInvestedRaw;
+
+    if (liquidRaw === undefined || investedRaw === undefined) {
+      try {
+        const rowRes = await DbClient.query(
+          `SELECT liquid_cash_usdc, invested_yield_usdc 
+           FROM dynamic_safe_to_invest 
+           WHERE account_id = $1 
+           ORDER BY record_id DESC 
+           LIMIT 1;`,
+          [accountId]
+        );
+        if (rowRes.rows.length > 0) {
+          if (liquidRaw === undefined && rowRes.rows[0].liquid_cash_usdc) {
+            liquidRaw = this.parseUsdcToRaw(String(rowRes.rows[0].liquid_cash_usdc));
+          }
+          if (investedRaw === undefined && rowRes.rows[0].invested_yield_usdc) {
+            investedRaw = this.parseUsdcToRaw(String(rowRes.rows[0].invested_yield_usdc));
+          }
+        }
+      } catch (e) {
+        // Fallback if table not queried
+      }
+    }
+
+    if (liquidRaw === undefined) liquidRaw = 100000000000n; // 100,000.000000 USDC default
+    if (investedRaw === undefined) investedRaw = 50000000000n; // 50,000.000000 USDC default
     const availableRaw = liquidRaw + investedRaw;
 
     const liquidStr = this.formatRawToUsdc(liquidRaw);
