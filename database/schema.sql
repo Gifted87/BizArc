@@ -103,3 +103,88 @@ CREATE TABLE IF NOT EXISTS master_system_journal (
 CREATE INDEX IF NOT EXISTS idx_journal_sequence ON master_system_journal(sequence_id);
 CREATE INDEX IF NOT EXISTS idx_journal_account ON master_system_journal(account_id);
 CREATE INDEX IF NOT EXISTS idx_journal_doc_ref ON master_system_journal(document_ref);
+
+-- ======================================================================================
+-- 7. Enterprise Vector Memory (pgvector HNSW Cosine Index)
+-- Supports RAG for Company Bylaws, MSAs, SLAs, Contracts, Board Minutes, ERP POs & Invoices
+-- ======================================================================================
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS enterprise_vector_memory (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    collection VARCHAR(64) NOT NULL, -- 'company_documents', 'msas', 'board_resolutions', 'vendor_masters', 'erp_pos', 'erp_invoices', 'historical_rulings', 'episodic_memory'
+    document_id VARCHAR(128) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    chunk_index INT NOT NULL DEFAULT 0,
+    content TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    embedding vector(1536),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_memory_collection ON enterprise_vector_memory(collection);
+CREATE INDEX IF NOT EXISTS idx_vector_memory_doc_id ON enterprise_vector_memory(document_id);
+CREATE INDEX IF NOT EXISTS idx_vector_memory_hnsw ON enterprise_vector_memory USING hnsw (embedding vector_cosine_ops);
+
+-- ======================================================================================
+-- 8. Single Continuous Running Context (Blackboard Stream)
+-- Shared real-time event ledger across all model-agnostic swarm agents
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS agent_continuous_context (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id VARCHAR(64) NOT NULL,
+    event_seq BIGSERIAL,
+    agent_id INT NOT NULL,
+    agent_name VARCHAR(64) NOT NULL,
+    event_type VARCHAR(64) NOT NULL, -- 'TASK_INITIATED', 'LLM_DELIBERATION', 'TOOL_CALLED', 'TOOL_RESULT', 'INVARIANT_CHECK', 'STATE_MUTATION', 'SYSTEM_INTERRUPT'
+    role VARCHAR(32) NOT NULL, -- 'system', 'user', 'assistant', 'tool'
+    content TEXT NOT NULL,
+    tool_calls JSONB,
+    tool_call_id VARCHAR(128),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_compacted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_session_seq ON agent_continuous_context(session_id, event_seq);
+CREATE INDEX IF NOT EXISTS idx_context_compacted ON agent_continuous_context(session_id, is_compacted);
+
+-- ======================================================================================
+-- 9. Dual-Stream Rolling Compaction Episodes (Tier 2 Context)
+-- Narrative strategic synthesis + deterministic 6-decimal invariant anchors
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS agent_context_compaction_episodes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id VARCHAR(64) NOT NULL,
+    episode_index INT NOT NULL,
+    start_seq BIGINT NOT NULL,
+    end_seq BIGINT NOT NULL,
+    narrative_summary TEXT NOT NULL,
+    deterministic_anchors JSONB NOT NULL, -- exact numeric balances, pending liabilities, doc hashes
+    embedding vector(1536),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_compaction_session_idx ON agent_context_compaction_episodes(session_id, episode_index);
+
+-- ======================================================================================
+-- 10. Dynamic Safe-to-Invest Record (Dynamic Record 2)
+-- Continuous calculation of investable liquidity vs upcoming liabilities
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS dynamic_safe_to_invest (
+    record_id BIGSERIAL PRIMARY KEY,
+    account_id VARCHAR(64) REFERENCES treasury_accounts(account_id) ON DELETE RESTRICT,
+    liquid_cash_usdc NUMERIC(18, 6) NOT NULL,
+    invested_yield_usdc NUMERIC(18, 6) NOT NULL,
+    available_balance_usdc NUMERIC(18, 6) NOT NULL,
+    target_reserve_usdc NUMERIC(18, 6) NOT NULL,
+    safe_to_invest_usdc NUMERIC(18, 6) NOT NULL,
+    time_horizon_seconds BIGINT NOT NULL,
+    recall_speed_seconds INT NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_safe_to_invest_account ON dynamic_safe_to_invest(account_id);
+CREATE INDEX IF NOT EXISTS idx_safe_to_invest_created ON dynamic_safe_to_invest(created_at DESC);
+
