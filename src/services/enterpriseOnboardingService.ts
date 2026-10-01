@@ -7,10 +7,9 @@ import { VendorMasterRepo, VendorMasterRecord } from "../database/repos/vendorMa
 import { LiabilityRepo, LiabilityDbRecord } from "../database/repos/liabilityRepo.js";
 import { MasterJournalRepo } from "../database/repos/masterJournalRepo.js";
 import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
-import { AccountRegistrationService } from "../services/accountRegistrationService.js";
-import { CentralTreasuryYieldVaultService } from "../contracts/centralTreasuryYieldVaultService.js";
-import { ArcClientManager } from "../foundation/arc/client.js";
+import { AccountRegistrationService } from "./accountRegistrationService.js";
 import { ARC_CONSTANTS } from "../foundation/arc/constants.js";
+import { ArcClientManager } from "../foundation/arc/client.js";
 import { ViemWalletAdapter } from "../foundation/wallets/viemWalletAdapter.js";
 
 export interface ErpSupplierRecord {
@@ -108,7 +107,7 @@ export interface ProvisioningResult {
   guardrailsHandoff: SpendingGuardrailsHandoff;
 }
 
-export class OnboardingAgent {
+export class EnterpriseOnboardingService {
   public readonly persona: AgentPersonaType = "OnboardingAgent";
   public readonly erc8004Id = AGENT_REGISTRY.OnboardingAgent.erc8004Id; // 100
   public readonly canSignTransactions = AGENT_REGISTRY.OnboardingAgent.canSignTransactions; // true
@@ -126,10 +125,10 @@ export class OnboardingAgent {
    */
   public async ingestIntakePayload(payload: EnterpriseIntakePayload): Promise<DiscoveredBusinessProfile> {
     if (!payload.companyName) {
-      throw new Error("[OnboardingAgent] Missing companyName in intake payload");
+      throw new Error("[EnterpriseOnboardingService] Missing companyName in intake payload");
     }
     if (!payload.costCenters || payload.costCenters.length === 0) {
-      throw new Error("[OnboardingAgent] At least one cost center is required for onboarding");
+      throw new Error("[EnterpriseOnboardingService] At least one cost center is required for onboarding");
     }
 
     const suppliers = payload.erpSuppliers ?? [];
@@ -173,7 +172,6 @@ export class OnboardingAgent {
       const isPayroll = cc.role === "PAYROLL";
       const isTreasury = cc.role === "TREASURY_RESERVE";
 
-      // Compute mathematical floors & multipliers
       let minFloor = 50.0;
       let safetyMultiplier = 1.20;
       let evalWindow = 14;
@@ -183,14 +181,13 @@ export class OnboardingAgent {
         minFloor = Math.max(100.0, cc.monthlyCommittedLiabilitiesUsdc * 0.1);
         safetyMultiplier = 1.25;
         evalWindow = 30;
-        maxSweep = 0.0; // Payroll cannot be swept into yield
+        maxSweep = 0.0;
       } else if (isTreasury) {
         minFloor = 250.0;
         safetyMultiplier = 1.20;
         evalWindow = 30;
         maxSweep = 25000.0;
       } else {
-        // OPEX (Dev / Growth)
         minFloor = Math.max(50.0, cc.highestSingleBillUsdc * 0.25);
         safetyMultiplier = 1.20;
         evalWindow = 14;
@@ -239,7 +236,7 @@ export class OnboardingAgent {
       description: `Automated onboarding policy synthesized for ${profile.companyName}`,
       operating_accounts: operatingAccounts,
       investment_rules: {
-        target_vault: ARC_CONSTANTS.TESTNET.usdcPredeploy, // Default Arc predeploy or configured CentralTreasuryYieldVault
+        target_vault: ARC_CONSTANTS.USDC_PREDEPLOY,
         max_company_allocation_ratio: 0.85,
         min_sweep_amount_usdc: 10.0,
         auto_sweep_enabled: true,
@@ -276,7 +273,6 @@ export class OnboardingAgent {
 
   /**
    * Phase 3 & 4: Account Provisioning, Database Seeding, and Ledger Genesis
-   * Commits the reviewed policy, provisions Arc L1 wallets, and initializes database & journal.
    */
   public async provisionAccountsAndLedger(params: {
     profile: DiscoveredBusinessProfile;
@@ -287,10 +283,8 @@ export class OnboardingAgent {
   }): Promise<ProvisioningResult> {
     const { profile, committedPolicy, customWallets = {} } = params;
 
-    // 1. Provision Accounts in PostgreSQL
     const createdAccounts: TreasuryAccountRecord[] = [];
     for (const accPolicy of committedPolicy.operating_accounts) {
-      // Deterministic fallback Arc wallet address if not explicitly passed
       const walletAddress =
         customWallets[accPolicy.account_id] ||
         (`0x${crypto.createHash("sha256").update(accPolicy.account_id).digest("hex").slice(0, 40)}` as `0x${string}`);
@@ -300,7 +294,7 @@ export class OnboardingAgent {
         name: accPolicy.name,
         role: accPolicy.role,
         wallet_address: walletAddress,
-        chain_id: 5042002, // Arc Testnet
+        chain_id: 5042002,
         min_operating_floor_usdc: accPolicy.min_floor_usdc,
         safety_buffer_ratio: accPolicy.safety_multiplier,
         is_active: true,
@@ -308,7 +302,6 @@ export class OnboardingAgent {
       createdAccounts.push(record);
     }
 
-    // 2. Seed Vendor Master Registry
     const registeredVendors: VendorMasterRecord[] = [];
     for (const supplier of profile.discoveredSuppliers) {
       const record = await VendorMasterRepo.registerVendor({
@@ -322,7 +315,6 @@ export class OnboardingAgent {
       registeredVendors.push(record);
     }
 
-    // 3. Seed Document-Linked Liabilities (Three-Way Match Verification)
     const scheduledLiabilities: LiabilityDbRecord[] = [];
     for (const inv of profile.discoveredLiabilities) {
       const supplier = profile.discoveredSuppliers.find((s) => s.supplierId === inv.supplierId);
@@ -333,9 +325,8 @@ export class OnboardingAgent {
         : undefined;
       const invoiceHash = keccak256(stringToHex(`INV:${inv.invoiceNumber}:${inv.amountUsdc}`));
 
-      // Determine initial status based on Three-Way Match (Rule 2)
       const hasDeliveryProof = !!inv.deliveryReceiptProof;
-      const initialStatus = hasDeliveryProof ? "SCHEDULED" : "UNMATCHED_DISPUTED";
+      const initialStatus = hasDeliveryProof ? "SCHEDULED" : "FROZEN";
 
       const liability = await LiabilityRepo.createLiability({
         account_id: inv.costCenter,
@@ -353,7 +344,6 @@ export class OnboardingAgent {
       scheduledLiabilities.push(liability);
     }
 
-    // 4. Initialize Genesis Block in Master System Journal (Rule 1 & Rule 5: Document-linked & Positive)
     const genesisDocRef = `DOC:GENESIS:${profile.companyName.replace(/\s+/g, "_")}`;
     const initialAllocationUsdc =
       committedPolicy.operating_accounts.reduce((sum, acc) => sum + acc.min_floor_usdc, 0) || 100.0;
@@ -367,7 +357,6 @@ export class OnboardingAgent {
       document_ref: genesisDocRef,
     });
 
-    // 5. Append Onboarding Audit Log linked to primary created account
     const primaryAccountId = createdAccounts[0]?.account_id || "acc_general_treasury";
     await AuditLogRepo.appendAuditLog({
       account_id: primaryAccountId,
@@ -384,7 +373,6 @@ export class OnboardingAgent {
       actor_agent: this.persona,
     });
 
-    // 6. Generate Phase 6 Spending Guardrails Terminal Handoff
     const guardrailsHandoff = this.generateSpendingGuardrailsCommands(
       createdAccounts.map((acc) => {
         const matchingPolicy = committedPolicy.operating_accounts.find((p) => p.account_id === acc.account_id);
@@ -411,13 +399,10 @@ export class OnboardingAgent {
 
   /**
    * Phase 6: Spending Guardrail Setup Command Generation (OTP Protection)
-   * Follows Circle Agent Stack & agent-wallet-policy strictly:
-   * Generates monotonic commands (`per-tx <= daily <= weekly <= monthly`) for user terminal execution.
    */
   public generateSpendingGuardrailsCommands(costCenters: DiscoveredCostCenter[]): SpendingGuardrailsHandoff {
     const commands: SpendingGuardrailCommand[] = costCenters.map((cc) => {
       const address = cc.walletAddress || "0x0000000000000000000000000000000000000000";
-      // Conservative monotonic spending policies (per-tx <= daily <= weekly <= monthly)
       const perTx = cc.role === "PAYROLL" ? 5000 : 500;
       const daily = cc.role === "PAYROLL" ? 25000 : 2500;
       const weekly = daily * 3;
@@ -447,7 +432,6 @@ export class OnboardingAgent {
 
   /**
    * Phase 7: Initial Funding & Activation Verification
-   * Checks if initial operating capital has arrived to enable autonomous sentinel monitoring.
    */
   public async verifyInitialFunding(
     accountId: string,
@@ -455,19 +439,16 @@ export class OnboardingAgent {
   ): Promise<{ isFunded: boolean; accountId: string; currentBalanceUsdc: number; status: string }> {
     const account = await TreasuryAccountsRepo.getAccountById(accountId);
     if (!account) {
-      throw new Error(`[OnboardingAgent] Account ${accountId} not found in registry`);
+      throw new Error(`[EnterpriseOnboardingService] Account ${accountId} not found in registry`);
     }
 
-    // Check balance on Arc L1 via PublicClient
     const publicClient = ArcClientManager.getPublicClient();
     let currentBalanceUsdc = 0;
 
     try {
       const nativeBalance = await publicClient.getBalance({ address: account.wallet_address });
-      // Arc Native USDC is 18 decimals, 10^12 factor to 6 decimals
       currentBalanceUsdc = Number(nativeBalance / 10n ** 12n) / 1_000_000;
     } catch {
-      // In offline or local test environments without live RPC faucet
       currentBalanceUsdc = 100.0;
     }
 

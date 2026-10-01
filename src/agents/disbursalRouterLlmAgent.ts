@@ -30,6 +30,7 @@ Your primary mandate is safe payment execution and multi-account waterfall routi
       allowedTools: [
         "read_dynamic_records",
         "plan_waterfall_allocation",
+        "evaluate_reason_bearing_intent",
         "execute_disbursal",
         "request_human_approval",
         "check_vendor_master",

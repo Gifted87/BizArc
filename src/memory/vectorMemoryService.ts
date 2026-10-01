@@ -143,6 +143,28 @@ HASH REF: 0x7fa26a310c812d87e0ef6b7bfa9c3e981f211320ef2294101e1dc59c4059a4bb
         },
       },
       {
+        collection: "delivery_receipts",
+        documentId: "GRN-2026-AWS-01",
+        title: "ERP Goods Receipt Note GRN-2026-AWS-01 / Cloud Telemetry Verification",
+        content: `
+GOODS RECEIPT NOTE (GRN): GRN-2026-AWS-01
+LINKED PO: PO-2026-AWS-01
+VENDOR: Amazon Web Services Inc. (VEND-AWS-01)
+STATUS: VERIFIED_DELIVERED
+DELIVERY PROOF: AWS CloudWatch operational metrics confirm 100% compute node uptime, RPC endpoint SLA met, and egress bandwidth consumed as billed.
+VERIFIED AMOUNT: 12,500.000000 USDC
+COMPLETION DATE: 2026-09-30
+TELEMETRY SIGNATURE: 0x9fa180ce82b130e54d89a421b01c38592adfb9129841cda1e92d837651a084c2
+        `,
+        metadata: {
+          po_number: "PO-2026-AWS-01",
+          grn_number: "GRN-2026-AWS-01",
+          vendor_id: "VEND-AWS-01",
+          amount_usdc: 12500,
+          status: "VERIFIED_DELIVERED",
+        },
+      },
+      {
         collection: "msas",
         documentId: "MSA-DATADOG-02",
         title: "Datadog Enterprise Monitoring Master Subscription Agreement",

@@ -108,8 +108,31 @@ Your primary mandate is Chief Risk & Governance Gatekeeper:
 
     // 3. Tier B Check: Declared Policy & Spending Caps
     const profile = PolicyLoader.getActiveProfile().profile;
-    const perTxCap = profile.spending_limits.per_transaction_cap_usdc || 25000;
-    const dailyCap = profile.spending_limits.daily_cap_usdc || 100000;
+    const perTxCap = (profile.spending_limits as any).per_transaction_cap_usdc ?? 25000;
+    const dailyCap = (profile.spending_limits as any).daily_cap_usdc ?? 100000;
+
+    // Enforce cumulative 24h daily hard spending cap on autonomous disbursals
+    if (intent.proposedAction.startsWith("DISBURSAL") && amountNum <= perTxCap) {
+      const dailyRes = await DbClient.query(
+        `SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spent
+         FROM master_system_journal
+         WHERE account_id = $1 
+           AND created_at >= NOW() - INTERVAL '24 hours'
+           AND action_type IN ('DISBURSAL_PAYMENT', 'DISBURSAL_SETTLEMENT');`,
+        [intent.accountId]
+      );
+      const dailySpent = parseFloat(dailyRes.rows[0]?.daily_spent || "0");
+      if (dailySpent + amountNum > dailyCap) {
+        violations.push(
+          `DAILY HARD CAP EXCEEDED: Proposed amount ${amountNum} USDC brings 24h spend (${(dailySpent + amountNum).toFixed(6)} USDC) above daily cap (${dailyCap} USDC).`
+        );
+        return {
+          decision: "DENY",
+          reason: `Intent denied due to hard invariant violations: ${violations.join("; ")}`,
+          violations,
+        };
+      }
+    }
 
     // Check if within standard autonomous bounds
     if (amountNum <= perTxCap) {

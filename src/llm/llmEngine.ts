@@ -251,6 +251,8 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
     // 2. Reason-Bearing Intent Evaluation
     if (
       tools?.some((t) => t.function.name === "evaluate_reason_bearing_intent") &&
+      !(tools?.some((t) => t.function.name === "sweep_excess_liquidity") && content.includes("sweep")) &&
+      !(tools?.some((t) => t.function.name === "recall_invested_liquidity") && (content.includes("recall") || content.includes("deficit"))) &&
       (content.includes("intent") || content.includes("permit") || content.includes("compliance") || content.includes("tier a") || content.includes("tier b"))
     ) {
       const action = payloadObj?.proposedAction || (content.includes("sweep") ? "AUTONOMOUS_SWEEP" : "DISBURSAL_SETTLEMENT");
@@ -317,6 +319,32 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
               arguments: JSON.stringify({
                 accountId,
                 amountUsdc: payloadObj?.customAmount || amountUsdc,
+                clearanceCode: payloadObj?.clearanceCode || "CLEAR-SWEEP-AUTO-01",
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // Recall Invested Liquidity
+    if (
+      tools?.some((t) => t.function.name === "recall_invested_liquidity") &&
+      (content.includes("recall") || content.includes("deficit") || content.includes("redeem"))
+    ) {
+      return {
+        content: `Executing emergency recall of ${amountUsdc} USDC from USYC Yield Vault for account ${accountId}.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_recall`,
+            type: "function",
+            function: {
+              name: "recall_invested_liquidity",
+              arguments: JSON.stringify({
+                accountId,
+                amountUsdc: payloadObj?.customAmount || amountUsdc,
+                reason: payloadObj?.reason || "Liquidity deficit / reserve floor restoration",
               }),
             },
           },
@@ -422,6 +450,107 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
               arguments: JSON.stringify({
                 query: rawTask,
                 topK: 3,
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 9. Onboarding Phase 2: Policy Synthesis
+    if (
+      tools?.some((t) => t.function.name === "synthesize_policy_proposal") &&
+      (content.includes("policy") || content.includes("synthesis") || content.includes("onboard"))
+    ) {
+      return {
+        content: `Synthesizing declared policies and mathematical rules for enterprise onboarding.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_policy_synth`,
+            type: "function",
+            function: {
+              name: "synthesize_policy_proposal",
+              arguments: JSON.stringify({
+                companyName: payloadObj?.companyName || "Acme Global Technologies Inc.",
+                costCenters: payloadObj?.costCenters || [],
+                suppliers: payloadObj?.erpSuppliers || [],
+                invoices: payloadObj?.erpInvoices || [],
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 10. Onboarding Phase 3 & 4: Provision Arc Wallets & Ledger Genesis
+    if (
+      tools?.some((t) => t.function.name === "provision_arc_wallets") &&
+      (content.includes("provision") || content.includes("genesis"))
+    ) {
+      return {
+        content: `Provisioning Arc L1 operating wallets and creating Genesis block in master system journal.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_provision`,
+            type: "function",
+            function: {
+              name: "provision_arc_wallets",
+              arguments: JSON.stringify({
+                companyName: payloadObj?.companyName || "Acme Global Technologies Inc.",
+                costCenters: payloadObj?.costCenters || [],
+                suppliers: payloadObj?.suppliers || [],
+                invoices: payloadObj?.invoices || [],
+                committedPolicy: payloadObj?.committedPolicy,
+                customWallets: payloadObj?.customWallets,
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 11. Onboarding Phase 6: Spending Guardrails Handoff
+    if (
+      tools?.some((t) => t.function.name === "generate_spending_guardrails_handoff") &&
+      (content.includes("guardrail") || content.includes("otp") || content.includes("limit"))
+    ) {
+      return {
+        content: `Generating Circle spending cap commands with OTP protection for terminal execution.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_guardrails`,
+            type: "function",
+            function: {
+              name: "generate_spending_guardrails_handoff",
+              arguments: JSON.stringify({
+                costCenters: payloadObj?.costCenters || [],
+              }),
+            },
+          },
+        ],
+        finish_reason: "tool_calls",
+      };
+    }
+
+    // 12. Onboarding Phase 7: Verify Initial Funding
+    if (
+      tools?.some((t) => t.function.name === "verify_initial_funding") &&
+      (content.includes("funding") || content.includes("deposit") || content.includes("activate"))
+    ) {
+      return {
+        content: `Verifying initial funding on Arc L1 for account ${accountId}.`,
+        tool_calls: [
+          {
+            id: `call_${Date.now()}_verify_funding`,
+            type: "function",
+            function: {
+              name: "verify_initial_funding",
+              arguments: JSON.stringify({
+                accountId: payloadObj?.accountId || accountId,
+                minDepositUsdc: payloadObj?.minDepositUsdc || 1.0,
               }),
             },
           },

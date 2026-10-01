@@ -3,7 +3,6 @@ import {
   TransactionReceipt,
   parseAbiItem,
   decodeEventLog,
-  Log,
 } from "viem";
 import { ArcClientManager } from "../foundation/arc/client.js";
 import { WebhookHandler, CircleWebhookPayload } from "../foundation/events/webhookHandler.js";
@@ -13,14 +12,14 @@ import { AGENT_REGISTRY, AgentPersonaType } from "../types/agents.js";
 
 export class ReconciledReceiptError extends Error {
   constructor(message: string) {
-    super(`[LedgerWitnessAgent:ReconciliationFailure] ${message}`);
+    super(`[LedgerWitnessService:ReconciliationFailure] ${message}`);
     this.name = "ReconciledReceiptError";
   }
 }
 
 export class LoudRoundingError extends Error {
   constructor(message: string) {
-    super(`[LedgerWitnessAgent:LoudRoundingError] ${message}`);
+    super(`[LedgerWitnessService:LoudRoundingError] ${message}`);
     this.name = "LoudRoundingError";
   }
 }
@@ -66,7 +65,7 @@ export interface WitnessResult {
   };
 }
 
-export class LedgerWitnessAgent {
+export class LedgerWitnessService {
   public readonly persona: AgentPersonaType = "LedgerWitnessAgent";
   public readonly erc8004Id = AGENT_REGISTRY.LedgerWitnessAgent.erc8004Id;
   public readonly canSignTransactions = AGENT_REGISTRY.LedgerWitnessAgent.canSignTransactions; // false

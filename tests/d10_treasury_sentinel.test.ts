@@ -1,5 +1,5 @@
-import { TreasurySentinelAgent, BalanceMutationEvent } from "../src/agents/treasurySentinelAgent.js";
-import { LedgerWitnessAgent } from "../src/agents/ledgerWitnessAgent.js";
+import { TreasurySentinelService as TreasurySentinelAgent, BalanceMutationEvent } from "../src/services/treasurySentinelService.js";
+import { LedgerWitnessService as LedgerWitnessAgent } from "../src/services/ledgerWitnessService.js";
 import { AccountIntelligenceService } from "../src/services/accountIntelligenceService.js";
 import { CentralTreasuryYieldVaultService } from "../src/contracts/centralTreasuryYieldVaultService.js";
 import { DbClient } from "../src/database/dbClient.js";

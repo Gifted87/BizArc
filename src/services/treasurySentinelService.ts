@@ -1,16 +1,12 @@
-import { PublicClient, parseAbiItem, keccak256, stringToHex } from "viem";
+import { keccak256, stringToHex } from "viem";
 import { AGENT_REGISTRY, AgentPersonaType } from "../types/agents.js";
 import { StandardizedPermissionRequest, SPROption, SPRActionType } from "../types/sprs.js";
 import { PolicyLoader } from "../config/policyLoader.js";
-import { TreasuryAccountsRepo, TreasuryAccountRecord } from "../database/repos/treasuryAccountsRepo.js";
-import { LiabilityRepo } from "../database/repos/liabilityRepo.js";
+import { TreasuryAccountsRepo } from "../database/repos/treasuryAccountsRepo.js";
 import { PermissionRequestRepo } from "../database/repos/permissionRequestRepo.js";
-import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
-import { MasterJournalRepo } from "../database/repos/masterJournalRepo.js";
 import { CentralTreasuryYieldVaultService } from "../contracts/centralTreasuryYieldVaultService.js";
-import { AccountIntelligenceService, AccountIntelligence } from "../services/accountIntelligenceService.js";
-import { LedgerWitnessAgent } from "./ledgerWitnessAgent.js";
-import { ArcClientManager } from "../foundation/arc/client.js";
+import { AccountIntelligenceService } from "./accountIntelligenceService.js";
+import { LedgerWitnessService } from "./ledgerWitnessService.js";
 
 export interface BalanceMutationEvent {
   accountId: string;
@@ -39,7 +35,7 @@ export interface SentinelEvaluationResult {
   timeHorizonSeconds?: number;
 }
 
-export class TreasurySentinelAgent {
+export class TreasurySentinelService {
   public readonly persona: AgentPersonaType = "TreasurySentinelAgent";
   public readonly erc8004Id = AGENT_REGISTRY.TreasurySentinelAgent.erc8004Id; // 101
   public readonly canSignTransactions = AGENT_REGISTRY.TreasurySentinelAgent.canSignTransactions; // true
@@ -47,7 +43,7 @@ export class TreasurySentinelAgent {
 
   private accountIntelligenceService: AccountIntelligenceService;
   private vaultService: CentralTreasuryYieldVaultService;
-  private witnessAgent: LedgerWitnessAgent;
+  private witnessAgent: LedgerWitnessService;
 
   // Concurrency lock manager (D10.4)
   private accountLocks: Set<string> = new Set();
@@ -60,25 +56,16 @@ export class TreasurySentinelAgent {
   constructor(options?: {
     intelService?: AccountIntelligenceService;
     vaultService?: CentralTreasuryYieldVaultService;
-    witnessAgent?: LedgerWitnessAgent;
+    witnessAgent?: LedgerWitnessService;
     debounceMs?: number;
     vaultAddress?: `0x${string}`;
   }) {
-    this.intelServiceOrDefault(options);
-    this.debounceMs = options?.debounceMs ?? 5000;
-  }
-
-  private intelServiceOrDefault(options?: {
-    intelService?: AccountIntelligenceService;
-    vaultService?: CentralTreasuryYieldVaultService;
-    witnessAgent?: LedgerWitnessAgent;
-    vaultAddress?: `0x${string}`;
-  }) {
     const { profile } = PolicyLoader.getActiveProfile();
-    const vaultAddr = options?.vaultAddress ?? (profile.yield_vault?.address as `0x${string}`) ?? "0x5555555555555555555555555555555555555555";
+    const vaultAddr = options?.vaultAddress ?? (profile.investment_rules?.target_vault as `0x${string}`) ?? "0x5555555555555555555555555555555555555555";
     this.vaultService = options?.vaultService ?? new CentralTreasuryYieldVaultService(vaultAddr);
-    this.accountIntelligenceService = options?.intelService ?? new AccountIntelligenceService(undefined, this.vaultService);
-    this.witnessAgent = options?.witnessAgent ?? new LedgerWitnessAgent();
+    this.accountIntelligenceService = options?.intelService ?? new AccountIntelligenceService();
+    this.witnessAgent = options?.witnessAgent ?? new LedgerWitnessService();
+    this.debounceMs = options?.debounceMs ?? 5000;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -103,10 +90,6 @@ export class TreasurySentinelAgent {
   // ─────────────────────────────────────────────────────────────────────────────
   // D10.3 INTERNAL-SETTLEMENT FILTERING
   // ─────────────────────────────────────────────────────────────────────────────
-  /**
-   * Filters out internal settlement transfers to avoid infinite feedback loops:
-   * (e.g., sweep to Central Yield Vault, recall from USYC, transfers to DisbursalVault)
-   */
   public isInternalSettlement(event: BalanceMutationEvent): boolean {
     if (
       event.origin === "INTERNAL_SETTLEMENT" ||
@@ -118,8 +101,8 @@ export class TreasurySentinelAgent {
     }
 
     const { profile } = PolicyLoader.getActiveProfile();
-    const vaultAddr = (profile.yield_vault?.address || "").toLowerCase();
-    const disbursalAddr = (profile.disbursal_vault?.address || "").toLowerCase();
+    const vaultAddr = ((profile.investment_rules?.target_vault as string) || "").toLowerCase();
+    const disbursalAddr = "0x5555555555555555555555555555555555555555".toLowerCase();
 
     if (event.from && (event.from.toLowerCase() === vaultAddr || event.from.toLowerCase() === disbursalAddr)) {
       return true;
@@ -134,13 +117,9 @@ export class TreasurySentinelAgent {
   // ─────────────────────────────────────────────────────────────────────────────
   // D10.1 & D10.2 BALANCE EVENT INGESTION & DEBOUNCE
   // ─────────────────────────────────────────────────────────────────────────────
-  /**
-   * Ingests a balance mutation event with debouncing and internal-settlement filtering.
-   */
   public async onBalanceMutation(
     event: BalanceMutationEvent
   ): Promise<SentinelEvaluationResult> {
-    // D10.3 Check internal settlement
     if (this.isInternalSettlement(event)) {
       return {
         accountId: event.accountId,
@@ -154,12 +133,10 @@ export class TreasurySentinelAgent {
       };
     }
 
-    // Force immediate execution (bypassing debounce) for tests or synchronous workflows
     if (event.forceImmediate) {
       return this.executeEvaluation(event.accountId, event.currentLiquidBalanceUsdc);
     }
 
-    // D10.2 Debounce Rapid Consecutive Events
     return new Promise((resolve, reject) => {
       if (this.debounceTimers.has(event.accountId)) {
         clearTimeout(this.debounceTimers.get(event.accountId)!);
@@ -186,10 +163,6 @@ export class TreasurySentinelAgent {
   // ─────────────────────────────────────────────────────────────────────────────
   // D10.5 - D10.9 CORE EVALUATION & POLICY COMPLIANCE
   // ─────────────────────────────────────────────────────────────────────────────
-  /**
-   * Evaluates an account's liquidity horizon, target reserve, safe-to-invest,
-   * hysteresis, and policy rules.
-   */
   public async evaluateAccount(
     accountId: string,
     currentLiquidBalanceUsdc: number
@@ -201,15 +174,14 @@ export class TreasurySentinelAgent {
     accountId: string,
     currentLiquidBalanceUsdc: number
   ): Promise<SentinelEvaluationResult> {
-    // D10.4 Acquire lock
     if (!this.acquireAccountLock(accountId)) {
-      throw new Error(`[TreasurySentinelAgent] Concurrency lock failed: Account '${accountId}' is currently being evaluated.`);
+      throw new Error(`[TreasurySentinelService] Concurrency lock failed: Account '${accountId}' is currently being evaluated.`);
     }
 
     try {
       const accountRecord = await TreasuryAccountsRepo.getAccountById(accountId);
       if (!accountRecord) {
-        throw new Error(`[TreasurySentinelAgent] Account '${accountId}' not found in registry.`);
+        throw new Error(`[TreasurySentinelService] Account '${accountId}' not found in registry.`);
       }
 
       const { profile } = PolicyLoader.getActiveProfile();
@@ -217,7 +189,6 @@ export class TreasurySentinelAgent {
       const invRules = profile.investment_rules;
       const spendingLimits = profile.spending_limits;
 
-      // Payroll & Protection check
       if (
         opPolicy?.exclude_from_waterfall_draws ||
         (opPolicy?.max_autonomous_sweep_limit !== undefined && opPolicy.max_autonomous_sweep_limit <= 0)
@@ -234,7 +205,6 @@ export class TreasurySentinelAgent {
         };
       }
 
-      // D10.5 Liquidity Horizon & Account Intelligence
       const intel = await this.accountIntelligenceService.getAccountIntelligence(accountId, {
         overrideLiquidBalance: currentLiquidBalanceUsdc,
       });
@@ -242,15 +212,12 @@ export class TreasurySentinelAgent {
       const targetReserveUsdc = parseFloat(intel.solvencyMetrics.requiredReserveUsdc);
       const timeHorizonSeconds = intel.solvencyMetrics.timeHorizonSeconds;
 
-      // Calculate unconstrained surplus above target reserve + hysteresis
       const rawSurplus = Math.max(
         0,
         currentLiquidBalanceUsdc - (targetReserveUsdc + invRules.invest_hysteresis_band_usdc)
       );
 
-      // D10.8 Hysteresis & Min Sweep Check
       if (rawSurplus < invRules.min_sweep_amount_usdc) {
-        // Check if recall needed
         const recallThreshold = targetReserveUsdc - invRules.recall_hysteresis_band_usdc;
         if (currentLiquidBalanceUsdc < recallThreshold) {
           const recallAmount = Number((targetReserveUsdc - currentLiquidBalanceUsdc).toFixed(6));
@@ -285,16 +252,12 @@ export class TreasurySentinelAgent {
         };
       }
 
-      // D10.9 Policy Compliance Branching: INSIDE vs OUTSIDE Rules
-      const singleTxLimit = spendingLimits?.per_transaction_limit_usdc ?? 5000;
+      const singleTxLimit = (spendingLimits as any)?.per_transaction_limit_usdc ?? 5000;
       const maxSweepLimit = opPolicy?.max_autonomous_sweep_limit ?? singleTxLimit;
 
       const isInsideRules = rawSurplus <= maxSweepLimit && rawSurplus <= singleTxLimit;
 
       if (isInsideRules) {
-        // ────────────────────────────────────────────────────────
-        // BRANCH 1: INSIDE RULES -> D11 Autonomous Sweep
-        // ────────────────────────────────────────────────────────
         const sweepAmount = rawSurplus;
         const amountBigInt = BigInt(Math.floor(sweepAmount * 1_000_000));
 
@@ -304,10 +267,8 @@ export class TreasurySentinelAgent {
           amountBigInt
         );
 
-        // Document-linked reference (Rule 1)
         const docRef = `SWEEP_INTENT_${accountId}_${Date.now()}`;
 
-        // Authoritative ledger entry via LedgerWitness (Rule 4: Segregation of Duties)
         await this.witnessAgent.recordJournalVoucher({
           accountId,
           actionType: "AUTONOMOUS_SWEEP",
@@ -343,9 +304,6 @@ export class TreasurySentinelAgent {
           timeHorizonSeconds,
         };
       } else {
-        // ────────────────────────────────────────────────────────
-        // BRANCH 2: OUTSIDE RULES -> D12 Human Gate (SPRS)
-        // ────────────────────────────────────────────────────────
         const requestId = `SPRS-SWEEP-${accountId}-${Date.now()}`;
         const sweepAmount = rawSurplus;
 
@@ -389,7 +347,6 @@ export class TreasurySentinelAgent {
           status: "PENDING",
         };
 
-        // Persist SPRS to permission_requests
         await PermissionRequestRepo.createRequest({
           request_id: requestId,
           action_type: "HIGH_VALUE_SWEEP_EXEMPTION",
@@ -399,7 +356,6 @@ export class TreasurySentinelAgent {
           payload: sprsPayload as any,
         });
 
-        // Audit log SPRS emission
         await this.witnessAgent.recordAccountAuditLog({
           accountId,
           actionType: "SPRS_EMITTED",
@@ -432,11 +388,6 @@ export class TreasurySentinelAgent {
   // ─────────────────────────────────────────────────────────────────────────────
   // HUMAN GATE RESOLUTION (D12 -> D11)
   // ─────────────────────────────────────────────────────────────────────────────
-  /**
-   * Resolves an admin decision for a High-Value Sweep SPRS:
-   * APPROVE -> Executes sweep and records to master journal.
-   * REJECT -> Cancels sweep and retains cash in liquid wallet.
-   */
   public async resolveSweepDecision(params: {
     requestId: string;
     decision: "APPROVE" | "REJECT";
@@ -449,7 +400,7 @@ export class TreasurySentinelAgent {
   }> {
     const sprs = await PermissionRequestRepo.getRequestById(params.requestId);
     if (!sprs) {
-      throw new Error(`[TreasurySentinelAgent] Permission request '${params.requestId}' not found.`);
+      throw new Error(`[TreasurySentinelService] Permission request '${params.requestId}' not found.`);
     }
 
     const accountId = sprs.payload.affectedAccounts[0]?.accountId;

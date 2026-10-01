@@ -56,6 +56,9 @@ export class SwarmCoordinator {
     this.routerAgent = new DisbursalRouterLlmAgent(agentDeps);
     this.complianceAgent = new PolicyComplianceLlmAgent(agentDeps);
     this.witnessAgent = new LedgerWitnessLlmAgent(agentDeps);
+
+    // Wire shared compliance agent into tool registry to eliminate circular disconnected instantiation
+    this.toolRegistry.setComplianceAgent(this.complianceAgent);
   }
 
 

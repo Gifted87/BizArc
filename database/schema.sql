@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS enterprise_vector_memory (
 
 CREATE INDEX IF NOT EXISTS idx_vector_memory_collection ON enterprise_vector_memory(collection);
 CREATE INDEX IF NOT EXISTS idx_vector_memory_doc_id ON enterprise_vector_memory(document_id);
-CREATE INDEX IF NOT EXISTS idx_vector_memory_hnsw ON enterprise_vector_memory USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_vector_memory_hnsw ON enterprise_vector_memory USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
 -- ======================================================================================
 -- 8. Single Continuous Running Context (Blackboard Stream)

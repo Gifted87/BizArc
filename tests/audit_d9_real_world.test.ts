@@ -1,4 +1,4 @@
-import { LiabilityRadarAgent } from "../src/agents/liabilityRadarAgent.js";
+import { LiabilityRadarService as LiabilityRadarAgent } from "../src/services/liabilityRadarService.js";
 import { DbClient } from "../src/database/dbClient.js";
 import { TreasuryAccountsRepo } from "../src/database/repos/treasuryAccountsRepo.js";
 import { VendorMasterRepo } from "../src/database/repos/vendorMasterRepo.js";

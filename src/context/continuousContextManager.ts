@@ -285,6 +285,26 @@ ${relevantMemorySnippets.join("\n\n")}`;
   }
 
   private async synthesizeNarrative(events: ContextEvent[]): Promise<string> {
+    const rawEvents = events
+      .map((e) => `[Seq #${e.eventSeq}] ${e.agentName} (${e.eventType}): ${e.content}`)
+      .join("\n");
+
+    try {
+      const response = await this.llmEngine.chatCompletion([
+        {
+          role: "system",
+          content:
+            "You are the BizArc Continuous Context Compaction Engine. Synthesize the provided agent events into a dense, factual semantic narrative stream preserving key decisions, account IDs, amounts, and operational state mutations. Output only the narrative synthesis.",
+        },
+        { role: "user", content: `Synthesize these swarm events:\n${rawEvents}` },
+      ]);
+      if (response && response.content && response.content.trim().length > 0) {
+        return response.content.trim();
+      }
+    } catch {
+      // Fallback to deterministic synthesis if LLM engine call is unavailable
+    }
+
     const summaryPoints: string[] = [];
     for (const ev of events) {
       if (ev.eventType === "TASK_INITIATED" || ev.eventType === "TOOL_RESULT" || ev.eventType === "STATE_MUTATION") {
@@ -317,11 +337,18 @@ ${relevantMemorySnippets.join("\n\n")}`;
 
     if (stiRes.rows.length > 0) {
       const r = stiRes.rows[0];
-      liquid = Number(r.liquid_cash_usdc).toFixed(6);
-      invested = Number(r.invested_yield_usdc).toFixed(6);
-      available = Number(r.available_balance_usdc).toFixed(6);
-      reserve = Number(r.target_reserve_usdc).toFixed(6);
-      safeToInvest = Number(r.safe_to_invest_usdc).toFixed(6);
+      // Format exact 6-decimal representation from PostgreSQL NUMERIC without IEEE 754 float contamination
+      const formatExact6 = (val: any): string => {
+        if (val === null || val === undefined) return "0.000000";
+        const str = String(val);
+        const [intPart, decPart = ""] = str.split(".");
+        return `${intPart}.${decPart.padEnd(6, "0").slice(0, 6)}`;
+      };
+      liquid = formatExact6(r.liquid_cash_usdc);
+      invested = formatExact6(r.invested_yield_usdc);
+      available = formatExact6(r.available_balance_usdc);
+      reserve = formatExact6(r.target_reserve_usdc);
+      safeToInvest = formatExact6(r.safe_to_invest_usdc);
     }
 
     // Read active liabilities

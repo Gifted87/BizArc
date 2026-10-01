@@ -7,6 +7,7 @@ import { AccountIntelligenceService } from "../services/accountIntelligenceServi
 import { CentralTreasuryYieldVaultService } from "../contracts/centralTreasuryYieldVaultService.js";
 import { DisbursalVaultService } from "../contracts/disbursalVaultService.js";
 import { PolicyComplianceLlmAgent } from "../agents/policyComplianceLlmAgent.js";
+import { EnterpriseOnboardingService } from "../services/enterpriseOnboardingService.js";
 
 export interface ToolExecutionResult {
   success: boolean;
@@ -19,17 +20,24 @@ export class ToolRegistry {
   private dynamicRecords: DynamicRecordsService;
   private accountIntelligence: AccountIntelligenceService;
   private complianceAgent?: PolicyComplianceLlmAgent;
+  private onboardingService: EnterpriseOnboardingService;
   private executedIdempotencyKeys: Set<string> = new Set();
 
   constructor(
     vectorMemory?: VectorMemoryService,
     dynamicRecords?: DynamicRecordsService,
     accountIntelligence?: AccountIntelligenceService,
-    complianceAgent?: PolicyComplianceLlmAgent
+    complianceAgent?: PolicyComplianceLlmAgent,
+    onboardingService?: EnterpriseOnboardingService
   ) {
     this.vectorMemory = vectorMemory || new VectorMemoryService();
     this.dynamicRecords = dynamicRecords || new DynamicRecordsService();
     this.accountIntelligence = accountIntelligence || new AccountIntelligenceService();
+    this.complianceAgent = complianceAgent;
+    this.onboardingService = onboardingService || new EnterpriseOnboardingService();
+  }
+
+  public setComplianceAgent(complianceAgent: PolicyComplianceLlmAgent): void {
     this.complianceAgent = complianceAgent;
   }
 
@@ -148,6 +156,10 @@ export class ToolRegistry {
             type: "object",
             properties: {
               requiredAmountUsdc: { type: "number", description: "Total USDC amount required for payment" },
+              balanceOverrides: {
+                type: "object",
+                description: "Optional projected or manual balance overrides across accounts",
+              },
             },
             required: ["requiredAmountUsdc"],
           },
@@ -237,6 +249,81 @@ export class ToolRegistry {
               payload: { type: "object", description: "Transaction parameters" },
             },
             required: ["accountId", "actionType", "amountUsdc", "reason", "payload"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "synthesize_policy_proposal",
+          description: "Phase 2: Synthesize suggested mathematical rules, reserve floors, spending caps, and declared policies based on discovered cost centers.",
+          parameters: {
+            type: "object",
+            properties: {
+              companyName: { type: "string", description: "Company legal name" },
+              costCenters: { type: "array", items: { type: "object" }, description: "Discovered cost centers" },
+            },
+            required: ["companyName", "costCenters"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "provision_arc_wallets",
+          description: "Phase 3 & 4: Provision Arc L1 operating accounts, register initial vendors, and initialize the genesis block in the master system journal.",
+          parameters: {
+            type: "object",
+            properties: {
+              companyName: { type: "string", description: "Company name" },
+              costCenters: { type: "array", items: { type: "object" } },
+              suppliers: { type: "array", items: { type: "object" } },
+              invoices: { type: "array", items: { type: "object" } },
+            },
+            required: ["companyName"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "generate_spending_guardrails_handoff",
+          description: "Phase 6: Generate monotonic spending guardrail CLI commands for terminal OTP handoff to human admin.",
+          parameters: {
+            type: "object",
+            properties: {
+              costCenters: { type: "array", items: { type: "object" } },
+            },
+            required: ["costCenters"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "verify_initial_funding",
+          description: "Phase 7: Verify initial USDC deposit on Arc L1 for provisioned treasury accounts to activate autonomous operations.",
+          parameters: {
+            type: "object",
+            properties: {
+              accountId: { type: "string", description: "Account identifier to check" },
+              minDepositUsdc: { type: "number", description: "Minimum funding threshold in USDC" },
+            },
+            required: ["accountId"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "ingest_enterprise_documents",
+          description: "Phase 1: Ingest corporate bylaws, MSAs, vendor SLAs, and ERP POs into Enterprise Vector Memory.",
+          parameters: {
+            type: "object",
+            properties: {
+              documents: { type: "array", items: { type: "object" }, description: "Array of enterprise documents to embed and index" },
+            },
+            required: ["documents"],
           },
         },
       },
@@ -346,11 +433,26 @@ export class ToolRegistry {
             }
           }
 
+          // 3. Query Goods Receipt Note (GRN) / Milestone Delivery Telemetry (Rule 2)
+          const grnResults = await this.vectorMemory.queryRelevantMemory(
+            `Goods Receipt Note Delivery ${poReference}`,
+            ["delivery_receipts", "goods_receipts"],
+            1
+          );
+
+          if (grnResults.length === 0) {
+            return {
+              success: false,
+              error: `3-Way Match Failed (Rule 2 Alert): Goods Receipt Note (GRN) or delivery telemetry not found for PO ${poReference}. Milestone delivery proof is unverified.`,
+            };
+          }
+
           return {
             success: true,
             data: {
               matchStatus: "MATCHED",
               poReference,
+              grnReference: grnResults[0].metadata?.grn_number || grnResults[0].documentId,
               approvedAmountUsdc: claimedAmountUsdc,
               verifiedPayoutAddress: claimedPayoutAddress,
               message: "3-Way Match verified cleanly across PO, Goods Receipt, and Vendor Master.",
@@ -438,7 +540,13 @@ export class ToolRegistry {
         }
 
         case "sweep_excess_liquidity": {
-          const { accountId, amountUsdc } = args;
+          const { accountId, amountUsdc, clearanceCode } = args;
+          if (!clearanceCode || typeof clearanceCode !== "string" || !clearanceCode.startsWith("CLEAR-")) {
+            return {
+              success: false,
+              error: `GOVERNANCE_VIOLATION: Missing or invalid compliance clearanceCode ('${clearanceCode}'). Treasury fund sweeps require prior reason-bearing intent evaluation and clearance from PolicyComplianceAgent (#104).`,
+            };
+          }
           const rawAmount = this.dynamicRecords.parseUsdcToRaw(amountUsdc);
           
           // Smart Contract Payload Encoding via CentralTreasuryYieldVaultService
@@ -563,7 +671,11 @@ export class ToolRegistry {
               previousHash,
               currentHash,
               documentRef,
-              erpSyncStatus: "POSTED_TO_ODOO_AND_ERPNEXT",
+              erpSyncStatus: "SYNCED_TO_MASTER_JOURNAL_AND_ERP_STAGED",
+              erpConnectors: {
+                odooSync: { status: "DISPATCHED", ref: `odoo_gl_${journalRes.rows[0].sequence_id}` },
+                erpNextSync: { status: "DISPATCHED", docType: "Journal Entry", docName: `ACC-JV-${journalRes.rows[0].sequence_id}` },
+              },
               timestamp: journalRes.rows[0].timestamp,
             },
           };
@@ -586,6 +698,74 @@ export class ToolRegistry {
               eip712Domain: { name: "BizArc Treasury", version: "1", chainId: 5042 },
               reason,
             },
+          };
+        }
+
+        case "synthesize_policy_proposal": {
+          const proposal = this.onboardingService.generatePolicyProposal({
+            companyName: args.companyName,
+            adminEmail: args.adminEmail || `admin@${args.companyName.toLowerCase().replace(/[^a-z0-9]/g, "")}.com`,
+            erpSource: args.erpSource || "MANUAL_IMPORT",
+            costCenters: args.costCenters || [],
+            discoveredSuppliers: args.suppliers || [],
+            discoveredLiabilities: args.invoices || [],
+          });
+          return {
+            success: true,
+            data: proposal,
+          };
+        }
+
+        case "provision_arc_wallets": {
+          const res = await this.onboardingService.provisionAccountsAndLedger({
+            profile: {
+              companyName: args.companyName,
+              adminEmail: args.adminEmail || "admin@corp.com",
+              erpSource: args.erpSource || "MANUAL_IMPORT",
+              costCenters: args.costCenters || [],
+              discoveredSuppliers: args.suppliers || [],
+              discoveredLiabilities: args.invoices || [],
+            },
+            committedPolicy: args.committedPolicy || this.onboardingService.generatePolicyProposal({
+              companyName: args.companyName,
+              adminEmail: "admin@corp.com",
+              erpSource: "MANUAL_IMPORT",
+              costCenters: args.costCenters || [],
+              discoveredSuppliers: args.suppliers || [],
+              discoveredLiabilities: args.invoices || [],
+            }).profile,
+            customWallets: args.customWallets,
+          });
+          return {
+            success: true,
+            data: res,
+          };
+        }
+
+        case "generate_spending_guardrails_handoff": {
+          const handoff = this.onboardingService.generateSpendingGuardrailsCommands(args.costCenters || []);
+          return {
+            success: true,
+            data: handoff,
+          };
+        }
+
+        case "verify_initial_funding": {
+          const res = await this.onboardingService.verifyInitialFunding(args.accountId, args.minDepositUsdc ?? 1.0);
+          return {
+            success: true,
+            data: res,
+          };
+        }
+
+        case "ingest_enterprise_documents": {
+          const docs = args.documents || [];
+          for (const doc of docs) {
+            await this.vectorMemory.ingestDocument(doc);
+          }
+          return {
+            success: true,
+            data: { ingestedCount: docs.length },
           };
         }
 

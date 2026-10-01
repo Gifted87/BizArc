@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { OnboardingAgent, EnterpriseIntakePayload } from "../src/agents/onboardingAgent.js";
+import { EnterpriseOnboardingService as OnboardingAgent, EnterpriseIntakePayload } from "../src/services/enterpriseOnboardingService.js";
 import { TreasuryAccountsRepo } from "../src/database/repos/treasuryAccountsRepo.js";
 import { VendorMasterRepo } from "../src/database/repos/vendorMasterRepo.js";
 import { LiabilityRepo } from "../src/database/repos/liabilityRepo.js";

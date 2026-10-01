@@ -1,8 +1,8 @@
 import {
-  LedgerWitnessAgent,
+  LedgerWitnessService as LedgerWitnessAgent,
   ReconciledReceiptError,
   LoudRoundingError,
-} from "../src/agents/ledgerWitnessAgent.js";
+} from "../src/services/ledgerWitnessService.js";
 import { DbClient } from "../src/database/dbClient.js";
 import { MasterJournalRepo } from "../src/database/repos/masterJournalRepo.js";
 import { AuditLogRepo } from "../src/database/repos/auditLogRepo.js";

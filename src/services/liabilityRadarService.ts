@@ -1,13 +1,12 @@
-import crypto from "crypto";
 import { keccak256, stringToHex } from "viem";
 import { AGENT_REGISTRY, AgentPersonaType } from "../types/agents.js";
 import { LiabilityCategory, LiabilityStatus } from "../types/accounts.js";
 import { StandardizedPermissionRequest, SPROption, SPRActionType } from "../types/sprs.js";
 import { LiabilityRepo, LiabilityDbRecord } from "../database/repos/liabilityRepo.js";
 import { VendorMasterRepo } from "../database/repos/vendorMasterRepo.js";
-import { PermissionRequestRepo, PermissionRequestRecord } from "../database/repos/permissionRequestRepo.js";
+import { PermissionRequestRepo } from "../database/repos/permissionRequestRepo.js";
 import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
-import { AccountIntelligenceService, AccountIntelligence } from "../services/accountIntelligenceService.js";
+import { AccountIntelligenceService } from "./accountIntelligenceService.js";
 
 export interface InboundLiabilityDocumentInput {
   accountId: string;
@@ -38,7 +37,7 @@ export interface ResolutionResult {
   cancellationMemo?: string;
 }
 
-export class LiabilityRadarAgent {
+export class LiabilityRadarService {
   public readonly persona: AgentPersonaType = "LiabilityRadarAgent";
   public readonly erc8004Id = AGENT_REGISTRY.LiabilityRadarAgent.erc8004Id;
   public readonly canSignTransactions = AGENT_REGISTRY.LiabilityRadarAgent.canSignTransactions; // false
@@ -55,12 +54,12 @@ export class LiabilityRadarAgent {
    */
   private validateUsdcPrecision(amount: number): void {
     if (amount <= 0) {
-      throw new Error(`[LiabilityRadarAgent] Amount must be positive. Received: ${amount}`);
+      throw new Error(`[LiabilityRadarService] Amount must be positive. Received: ${amount}`);
     }
     const str = amount.toString();
     const parts = str.split(".");
     if (parts.length > 1 && parts[1].length > 6) {
-      throw new Error(`[LiabilityRadarAgent] Rule 5 Violation: Amount ${amount} exceeds 6-decimal USDC precision.`);
+      throw new Error(`[LiabilityRadarService] Rule 5 Violation: Amount ${amount} exceeds 6-decimal USDC precision.`);
     }
   }
 
@@ -284,7 +283,7 @@ export class LiabilityRadarAgent {
   }): Promise<ResolutionResult> {
     const sprs = await PermissionRequestRepo.getRequestById(params.requestId);
     if (!sprs) {
-      throw new Error(`[LiabilityRadarAgent] Permission request '${params.requestId}' not found.`);
+      throw new Error(`[LiabilityRadarService] Permission request '${params.requestId}' not found.`);
     }
 
     // Extract liabilityId from requestId ("SPRS-LIAB-<uuid>")
