@@ -27,6 +27,7 @@ export interface IngestionResult {
   securityAlert?: string;
   anomalyDetected?: boolean;
   anomalyReason?: string;
+  isDuplicate?: boolean;
 }
 
 export interface ResolutionResult {
@@ -81,6 +82,16 @@ export class LiabilityRadarAgent {
 
     const docContent = input.rawDocumentContent ?? `${input.vendorId}|${input.title}|${input.amountUsdc}|${input.dueDate}`;
     const invoiceHash = this.computeDocumentHash(docContent);
+
+    // Idempotency Check: Prevent duplicate invoice processing
+    const existing = await LiabilityRepo.getLiabilityByInvoiceHash(invoiceHash);
+    if (existing) {
+      return {
+        liability: existing,
+        isDuplicate: true,
+        securityAlert: `DUPLICATE_INVOICE_WARNING: Invoice with hash '${invoiceHash}' already registered as liability '${existing.liability_id}'.`,
+      };
+    }
 
     // Rule 3: Vendor Master Check (Payee Substitution Protection)
     const vendorRecord = await VendorMasterRepo.getVendorById(input.vendorId);

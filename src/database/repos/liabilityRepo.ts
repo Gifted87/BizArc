@@ -107,6 +107,19 @@ export class LiabilityRepo {
     }));
   }
 
+  public static async getLiabilityByInvoiceHash(
+    invoiceHash: string
+  ): Promise<LiabilityDbRecord | null> {
+    const text = `SELECT * FROM account_liabilities WHERE source_invoice_hash = $1 LIMIT 1;`;
+    const result = await DbClient.query<LiabilityDbRecord>(text, [invoiceHash]);
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    return {
+      ...row,
+      amount_usdc: Number(row.amount_usdc),
+    };
+  }
+
   public static async updateLiabilityStatus(
     liabilityId: string,
     status: LiabilityStatus
