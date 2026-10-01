@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "tsx tests/d1_environment.test.ts"
+    "test:d1": "tsx tests/d1_environment.test.ts",
+    "test:d2": "tsx tests/d2_foundation.test.ts",
+    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -18,7 +20,9 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@circle-fin/developer-controlled-wallets": "^10.6.0",
     "dotenv": "^18.0.5",
+    "viem": "^2.57.2",
     "yaml": "^2.9.1"
   }
 }
