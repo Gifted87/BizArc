@@ -5,6 +5,9 @@ export * from "./types/agents.js";
 export * from "./config/policyLoader.js";
 export * from "./foundation/index.js";
 export * from "./contracts/index.js";
+export * from "./database/index.js";
+export * from "./services/accountRegistrationService.js";
+export * from "./services/vendorMasterService.js";
 
 // Convenience bootstrap function
 import { PolicyLoader } from "./config/policyLoader.js";
