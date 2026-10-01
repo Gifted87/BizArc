@@ -25,7 +25,7 @@ describe("D0.B OnboardingAgent & D0-D3 Foundation Real-World Audit", () => {
   });
 
   after(async () => {
-    // Keep test data inspectable or clean up
+    await DbClient.closePool();
   });
 
   it("Test 1: Persona and Segregation of Duties", () => {

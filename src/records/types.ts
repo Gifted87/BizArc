@@ -6,7 +6,8 @@ export type LiabilityStatus =
   | "DISBURSED"
   | "CANCELLED"
   | "FROZEN"
-  | "DISPUTED";
+  | "DISPUTED"
+  | "UNMATCHED_DISPUTED";
 
 export interface DynamicLiabilityRecord {
   liabilityId: string;

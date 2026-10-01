@@ -20,7 +20,8 @@ export type LiabilityStatus =
   | "AWAITING_APPROVAL"
   | "DISBURSED"
   | "CANCELLED"
-  | "FROZEN";
+  | "FROZEN"
+  | "UNMATCHED_DISPUTED";
 
 export interface AccountLiabilityRecord {
   liabilityId: string;

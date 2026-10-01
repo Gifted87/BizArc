@@ -326,7 +326,7 @@ export class EnterpriseOnboardingService {
       const invoiceHash = keccak256(stringToHex(`INV:${inv.invoiceNumber}:${inv.amountUsdc}`));
 
       const hasDeliveryProof = !!inv.deliveryReceiptProof;
-      const initialStatus = hasDeliveryProof ? "SCHEDULED" : "FROZEN";
+      const initialStatus = hasDeliveryProof ? "SCHEDULED" : "UNMATCHED_DISPUTED";
 
       const liability = await LiabilityRepo.createLiability({
         account_id: inv.costCenter,
