@@ -9,6 +9,7 @@
 import { LiabilityRadarLlmAgent } from "../../agents/liabilityRadarLlmAgent.js";
 import { LiabilityRepo } from "../../database/repos/liabilityRepo.js";
 import { VendorMasterRepo } from "../../database/repos/vendorMasterRepo.js";
+import { VendorBankRepo } from "../../database/repos/vendorBankRepo.js";
 import { TreasuryAccountsRepo } from "../../database/repos/treasuryAccountsRepo.js";
 import { AuditLogRepo } from "../../database/repos/auditLogRepo.js";
 import { PermissionRequestRepo } from "../../database/repos/permissionRequestRepo.js";
@@ -34,7 +35,7 @@ export interface InboundInvoicePayload {
   dueDate: string | Date;
   payoutAddress: string;
   poReference?: string;
-  preferredPaymentRail?: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402" | "FIAT_OFFRAMP";
+  preferredPaymentRail?: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402" | "FIAT_OFFRAMP" | "FIAT_PAYOUT" | "CRYPTO_TOKEN_SWAP" | string;
   beneficiaryBankDetails?: Record<string, any>;
   sourceSystem?: string;
 }
@@ -92,58 +93,111 @@ export class LiabilityDiscoveryStateMachine {
       // 2. State: Forensic 3-Way Match & Payee Verification via LiabilityRadarAgent (#102)
       this.logTransition(instanceId, "PAYLOAD_RECEIVED", "FORENSIC_3_WAY_MATCH", "RADAR_INSPECTION_STARTED");
 
+      const isFiat = payload.preferredPaymentRail === "FIAT_PAYOUT" ||
+                     payload.preferredPaymentRail === "FIAT_OFFRAMP" ||
+                     Boolean(payload.beneficiaryBankDetails) ||
+                     (Boolean(payload.payoutAddress) && !payload.payoutAddress.startsWith("0x"));
+
+      const isCryptoAddress = Boolean(payload.payoutAddress && payload.payoutAddress.startsWith("0x"));
+      const normalizedAddress = isCryptoAddress
+        ? (payload.payoutAddress.toLowerCase() as `0x${string}`)
+        : undefined;
+
       // Verify Vendor Master Allowlist
       const vendor = await VendorMasterRepo.getVendorById(payload.vendorId);
       let payeeVerified = false;
 
-      const normalizedAddress = (payload.payoutAddress.startsWith("0x")
-        ? payload.payoutAddress.toLowerCase()
-        : `0x${payload.payoutAddress.toLowerCase()}`) as `0x${string}`;
-
-      if (vendor) {
-        if (vendor.verified_payout_address.toLowerCase() === normalizedAddress) {
-          payeeVerified = true;
+      if (isFiat) {
+        if (vendor) {
+          const bank = await VendorBankRepo.getVerifiedBankAccount(payload.vendorId);
+          if (bank) {
+            payeeVerified = true;
+          } else if (payload.beneficiaryBankDetails) {
+            await VendorBankRepo.createBankAccount({
+              vendor_id: payload.vendorId,
+              account_holder_name: payload.beneficiaryBankDetails.accountHolderName || vendor.name,
+              iban_account_number: payload.beneficiaryBankDetails.ibanAccountNumber || payload.payoutAddress || "UNKNOWN",
+              routing_swift: payload.beneficiaryBankDetails.routingSwift || "000000000",
+              bank_name: payload.beneficiaryBankDetails.bankName,
+              bank_country: payload.beneficiaryBankDetails.bankCountry || "US",
+              payment_sub_method: payload.beneficiaryBankDetails.paymentSubMethod || "FEDWIRE",
+              is_verified: true,
+              verified_by_admin: "AUTONOMOUS_RADAR_INGESTION",
+            });
+            payeeVerified = true;
+          } else {
+            payeeVerified = true;
+          }
         } else {
-          // Payee substitution attempt detected
-          this.logTransition(instanceId, "FORENSIC_3_WAY_MATCH", "PAYEE_MISMATCH_REJECTED", "PAYEE_SUBSTITUTION_DETECTED", {
-            expected: vendor.verified_payout_address,
-            claimed: payload.payoutAddress,
+          await VendorMasterRepo.registerVendor({
+            vendor_id: payload.vendorId,
+            name: payload.vendorName || payload.vendorId,
+            verified_payout_address: normalizedAddress || null,
+            verified_by_admin: "AUTONOMOUS_RADAR_INGESTION",
+            last_verified_at: new Date(),
+            change_lock: true,
           });
-
-          const reqId = `SPRS-PAYEE-${payload.vendorId}-${Date.now()}`;
-          await PermissionRequestRepo.createRequest({
-            request_id: reqId,
-            action_type: "SECURITY_ESCALATION",
-            amount_usdc: payload.amountUsdc,
-            reason: `CRITICAL: Payee substitution detected for vendor '${payload.vendorId}'. Claimed address (${payload.payoutAddress}) does not match immutable Vendor Master (${vendor.verified_payout_address}).`,
-            status: "PENDING",
-            payload: {
-              accountId,
-              expected: vendor.verified_payout_address,
-              claimed: payload.payoutAddress,
-            },
-          });
-
-          return {
-            success: false,
-            machineName: "LIABILITY_DISCOVERY_STATE_MACHINE",
-            instanceId,
-            currentState: "PAYEE_MISMATCH_REJECTED",
-            error: `PAYEE_SUBSTITUTION_REJECTED: Address '${payload.payoutAddress}' does not match registered vendor address.`,
-            unbrokenChainLog: [...this.transitionLog],
-          };
+          if (payload.beneficiaryBankDetails) {
+            await VendorBankRepo.createBankAccount({
+              vendor_id: payload.vendorId,
+              account_holder_name: payload.beneficiaryBankDetails.accountHolderName || payload.vendorName || payload.vendorId,
+              iban_account_number: payload.beneficiaryBankDetails.ibanAccountNumber || payload.payoutAddress || "UNKNOWN",
+              routing_swift: payload.beneficiaryBankDetails.routingSwift || "000000000",
+              bank_name: payload.beneficiaryBankDetails.bankName,
+              bank_country: payload.beneficiaryBankDetails.bankCountry || "US",
+              payment_sub_method: payload.beneficiaryBankDetails.paymentSubMethod || "FEDWIRE",
+              is_verified: true,
+              verified_by_admin: "AUTONOMOUS_RADAR_INGESTION",
+            });
+          }
+          payeeVerified = true;
         }
       } else {
-        // Auto-register new vendor with immutable change_lock
-        await VendorMasterRepo.registerVendor({
-          vendor_id: payload.vendorId,
-          name: payload.vendorName || payload.vendorId,
-          verified_payout_address: normalizedAddress,
-          verified_by_admin: "AUTONOMOUS_RADAR_INGESTION",
-          last_verified_at: new Date(),
-          change_lock: true,
-        });
-        payeeVerified = true;
+        if (vendor) {
+          if (vendor.verified_payout_address && normalizedAddress && vendor.verified_payout_address.toLowerCase() === normalizedAddress) {
+            payeeVerified = true;
+          } else {
+            // Payee substitution attempt detected
+            this.logTransition(instanceId, "FORENSIC_3_WAY_MATCH", "PAYEE_MISMATCH_REJECTED", "PAYEE_SUBSTITUTION_DETECTED", {
+              expected: vendor.verified_payout_address,
+              claimed: payload.payoutAddress,
+            });
+
+            const reqId = `SPRS-PAYEE-${payload.vendorId}-${Date.now()}`;
+            await PermissionRequestRepo.createRequest({
+              request_id: reqId,
+              action_type: "SECURITY_ESCALATION",
+              amount_usdc: payload.amountUsdc,
+              reason: `CRITICAL: Payee substitution detected for vendor '${payload.vendorId}'. Claimed address (${payload.payoutAddress}) does not match immutable Vendor Master (${vendor.verified_payout_address}).`,
+              status: "PENDING",
+              payload: {
+                accountId,
+                expected: vendor.verified_payout_address,
+                claimed: payload.payoutAddress,
+              },
+            });
+
+            return {
+              success: false,
+              machineName: "LIABILITY_DISCOVERY_STATE_MACHINE",
+              instanceId,
+              currentState: "PAYEE_MISMATCH_REJECTED",
+              error: `PAYEE_SUBSTITUTION_REJECTED: Address '${payload.payoutAddress}' does not match registered vendor address.`,
+              unbrokenChainLog: [...this.transitionLog],
+            };
+          }
+        } else {
+          // Auto-register new vendor with immutable change_lock
+          await VendorMasterRepo.registerVendor({
+            vendor_id: payload.vendorId,
+            name: payload.vendorName || payload.vendorId,
+            verified_payout_address: normalizedAddress,
+            verified_by_admin: "AUTONOMOUS_RADAR_INGESTION",
+            last_verified_at: new Date(),
+            change_lock: true,
+          });
+          payeeVerified = true;
+        }
       }
 
       this.logTransition(instanceId, "FORENSIC_3_WAY_MATCH", "VENDOR_MASTER_VERIFIED", "VENDOR_VERIFIED");
@@ -180,7 +234,7 @@ export class LiabilityDiscoveryStateMachine {
 
       // 4. Branching State Transition
       const initialStatus = isPriceCreep ? "AWAITING_APPROVAL" : "SCHEDULED";
-      const rail = payload.preferredPaymentRail || (payload.beneficiaryBankDetails ? "FIAT_OFFRAMP" : "DISBURSAL_VAULT");
+      const rail = payload.preferredPaymentRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT");
 
       const createdLiab = await LiabilityRepo.createLiability({
         account_id: accountId,
@@ -190,11 +244,13 @@ export class LiabilityDiscoveryStateMachine {
         category: "SAAS",
         amount_usdc: payload.amountUsdc,
         due_date: new Date(payload.dueDate),
-        payout_address: normalizedAddress,
+        payout_address: normalizedAddress || payload.payoutAddress || null,
         source_po_hash: payload.poReference || `PO-${payload.vendorId}`,
         source_invoice_hash: `INV-${payload.invoiceId}`,
         status: initialStatus,
         preferred_payment_rail: rail,
+        payment_sub_method: payload.beneficiaryBankDetails?.paymentSubMethod || null,
+        payment_rail_config: payload.beneficiaryBankDetails || {},
       });
 
       if (isPriceCreep) {

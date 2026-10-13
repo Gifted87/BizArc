@@ -95,7 +95,10 @@ export class Erc3009AuthorizationRail {
   ): Promise<UniversalDisbursalExecutionResult> {
     const nowSec = Math.floor(Date.now() / 1000);
     const valueBigInt = BigInt(Math.floor(intent.amountUsdc * 1_000_000));
-    const toAddress = getAddress(intent.payoutAddress || "0x0000000000000000000000000000000000000001") as `0x${string}`;
+    if (!intent.payoutAddress || !intent.payoutAddress.startsWith("0x")) {
+      throw new Error(`[Erc3009AuthorizationRail] INVALID_PAYOUT_ADDRESS: Rail 3 requires a valid 0x destination address. Received: '${intent.payoutAddress}'`);
+    }
+    const toAddress = getAddress(intent.payoutAddress) as `0x${string}`;
 
     const defaultSender = (this.executor ? this.executor.getAddress() : (process.env.TEST_ADMIN_ADDRESS as `0x${string}`) || "0x90F79bf6EB2c4f870365E785982E1f101E93b906");
     const fromAddress = authorization?.from ? getAddress(authorization.from) : getAddress(defaultSender);

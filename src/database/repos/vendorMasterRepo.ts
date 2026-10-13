@@ -3,7 +3,7 @@ import { DbClient } from "../dbClient.js";
 export interface VendorMasterRecord {
   vendor_id: string;
   name: string;
-  verified_payout_address: `0x${string}`;
+  verified_payout_address?: `0x${string}` | string | null;
   verified_by_admin: string;
   last_verified_at: Date;
   change_lock: boolean;
@@ -20,14 +20,18 @@ export class VendorMasterRepo {
       ) VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (vendor_id) DO UPDATE SET
         name = EXCLUDED.name,
+        verified_payout_address = COALESCE(EXCLUDED.verified_payout_address, vendor_master_registry.verified_payout_address),
         verified_by_admin = EXCLUDED.verified_by_admin,
         last_verified_at = EXCLUDED.last_verified_at
       RETURNING *;
     `;
+    const addressVal = vendor.verified_payout_address
+      ? vendor.verified_payout_address.toLowerCase()
+      : null;
     const values = [
       vendor.vendor_id,
       vendor.name,
-      vendor.verified_payout_address.toLowerCase(),
+      addressVal,
       vendor.verified_by_admin,
       vendor.last_verified_at || new Date(),
       vendor.change_lock ?? true,
@@ -42,6 +46,14 @@ export class VendorMasterRepo {
   ): Promise<VendorMasterRecord | null> {
     const text = `SELECT * FROM vendor_master_registry WHERE vendor_id = $1 LIMIT 1;`;
     const result = await DbClient.query<VendorMasterRecord>(text, [vendorId]);
+    return result.rows[0] || null;
+  }
+
+  public static async getVendorByName(
+    name: string
+  ): Promise<VendorMasterRecord | null> {
+    const text = `SELECT * FROM vendor_master_registry WHERE LOWER(name) = LOWER($1) LIMIT 1;`;
+    const result = await DbClient.query<VendorMasterRecord>(text, [name]);
     return result.rows[0] || null;
   }
 
@@ -111,7 +123,7 @@ export class VendorMasterRepo {
     fallbackAddress?: `0x${string}`
   ): Promise<`0x${string}`> {
     const direct = await this.getVendorById(vendorId);
-    if (direct) return direct.verified_payout_address;
+    if (direct?.verified_payout_address) return direct.verified_payout_address as `0x${string}`;
 
     const alias = vendorId.startsWith("vendor_")
       ? vendorId.replace("vendor_", "vnd_")
@@ -121,7 +133,7 @@ export class VendorMasterRepo {
 
     if (alias) {
       const aliasRecord = await this.getVendorById(alias);
-      if (aliasRecord) return aliasRecord.verified_payout_address;
+      if (aliasRecord?.verified_payout_address) return aliasRecord.verified_payout_address as `0x${string}`;
     }
 
     if (fallbackAddress) {

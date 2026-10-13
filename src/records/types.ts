@@ -22,6 +22,11 @@ export interface DynamicLiabilityRecord {
   documentHash: string; // SHA-256 of invoice/contract
   poReference?: string;
   status: LiabilityStatus;
+  companyId?: string;
+  preferredPaymentRail?: string;
+  paymentSubMethod?: string;
+  paymentRailConfig?: Record<string, any>;
+  disbursalRules?: Record<string, any>;
   createdAt: Date;
   updatedAt: Date;
 }

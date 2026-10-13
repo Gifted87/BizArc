@@ -153,13 +153,13 @@ Your primary mandate is safe payment execution and multi-account waterfall routi
       title: string;
       amountUsdc: string;
       vendorId: string;
-      payoutAddress: string;
+      payoutAddress?: string;
       category?: string;
       preferredPaymentRail?: string;
       beneficiaryBankDetails?: Record<string, any>;
     }
   ) {
-    const task = `Orchestrate and execute scheduled disbursal for liability ${params.liabilityId} ('${params.title}') of ${params.amountUsdc} USDC to vendor ${params.vendorId} (${params.payoutAddress}) for category ${params.category || "SAAS"}.
+    const task = `Orchestrate and execute scheduled disbursal for liability ${params.liabilityId} ('${params.title}') of ${params.amountUsdc} USDC to vendor ${params.vendorId} (${params.payoutAddress || "fiat bank account"}) for category ${params.category || "SAAS"}.
 Step 1: Check account liquid balance and dynamic records via 'read_dynamic_records' or 'get_unified_asset_distribution'.
 Step 2: If liquid balance is less than required, execute predictive recall of invested USYC using 'recall_invested_liquidity' or 'execute_predictive_recall'.
 Step 3: Qualify disbursal route using 'qualify_disbursal_route' or 'plan_waterfall_allocation', strictly isolating payroll.

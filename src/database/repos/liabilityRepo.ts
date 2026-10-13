@@ -11,11 +11,12 @@ export interface LiabilityDbRecord {
   amount_usdc: number;
   due_date: Date;
   frequency_cron?: string | null;
-  payout_address: `0x${string}` | string;
+  payout_address?: `0x${string}` | string | null;
   source_po_hash?: string | null;
   source_invoice_hash?: string | null;
   status: LiabilityStatus;
   preferred_payment_rail?: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402" | "FIAT_PAYOUT" | string;
+  payment_sub_method?: "FEDWIRE" | "ACH" | "PUSH_TO_CARD" | "SEPA" | "SWIFT" | string | null;
   payment_rail_config?: Record<string, any>;
   disbursal_rules?: Record<string, any>;
   waterfall_override?: Record<string, any> | null;
@@ -29,6 +30,7 @@ function mapLiabilityRow(row: any): LiabilityDbRecord {
     company_id: row.company_id || "default_org",
     amount_usdc: Number(row.amount_usdc),
     preferred_payment_rail: row.preferred_payment_rail || "DISBURSAL_VAULT",
+    payment_sub_method: row.payment_sub_method || null,
     payment_rail_config: typeof row.payment_rail_config === "object" ? row.payment_rail_config : {},
     disbursal_rules: typeof row.disbursal_rules === "object" ? row.disbursal_rules : {
       autoPayThresholdUsdc: 500,
@@ -47,11 +49,14 @@ export class LiabilityRepo {
       INSERT INTO account_liabilities (
         company_id, account_id, vendor_id, title, category, amount_usdc,
         due_date, frequency_cron, payout_address, source_po_hash,
-        source_invoice_hash, status, preferred_payment_rail, payment_rail_config,
+        source_invoice_hash, status, preferred_payment_rail, payment_sub_method, payment_rail_config,
         disbursal_rules, waterfall_override
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *;
     `;
+    const addressVal = liability.payout_address
+      ? liability.payout_address.toLowerCase()
+      : null;
     const values = [
       liability.company_id || "default_org",
       liability.account_id,
@@ -61,11 +66,12 @@ export class LiabilityRepo {
       liability.amount_usdc,
       liability.due_date,
       liability.frequency_cron || null,
-      liability.payout_address.toLowerCase(),
+      addressVal,
       liability.source_po_hash || null,
       liability.source_invoice_hash || null,
       liability.status || "SCHEDULED",
       liability.preferred_payment_rail || "DISBURSAL_VAULT",
+      liability.payment_sub_method || null,
       JSON.stringify(liability.payment_rail_config || {}),
       JSON.stringify(liability.disbursal_rules || {
         autoPayThresholdUsdc: 500,
@@ -217,8 +223,12 @@ export class LiabilityRepo {
       fields.push(`frequency_cron = $${values.length}`);
     }
     if (updates.payout_address !== undefined) {
-      values.push(updates.payout_address.toLowerCase());
+      values.push(updates.payout_address ? updates.payout_address.toLowerCase() : null);
       fields.push(`payout_address = $${values.length}`);
+    }
+    if (updates.payment_sub_method !== undefined) {
+      values.push(updates.payment_sub_method);
+      fields.push(`payment_sub_method = $${values.length}`);
     }
     if (updates.status !== undefined) {
       values.push(updates.status);

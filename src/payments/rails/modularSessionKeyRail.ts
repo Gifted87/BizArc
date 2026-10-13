@@ -1,6 +1,8 @@
 import crypto from "crypto";
 import { SessionKeyRepo, SessionKeyRecord } from "../../database/repos/sessionKeyRepo.js";
 import { ArcClientManager } from "../../foundation/arc/client.js";
+import { ArcTransactionExecutor } from "../../foundation/wallets/arcTransactionExecutor.js";
+import { ARC_CONSTANTS } from "../../foundation/arc/constants.js";
 import { UniversalDisbursalIntent, UniversalDisbursalExecutionResult } from "./types.js";
 
 // Standard ERC-4337 EntryPoint v0.6.0 on EVM/Arc
@@ -21,6 +23,11 @@ export interface PackedUserOperation {
 }
 
 export class ModularSessionKeyRail {
+  private executor?: ArcTransactionExecutor;
+
+  constructor(executor?: ArcTransactionExecutor) {
+    this.executor = executor;
+  }
   /**
    * Registers a persistent scoped session key for an account into PostgreSQL
    */
@@ -64,7 +71,10 @@ export class ModularSessionKeyRail {
     if (!record) {
       const cycleSec = 30 * 86400;
       const validUntil = Math.floor(Date.now() / 1000) + 365 * 86400;
-      const payout = intent.payoutAddress || "0x0000000000000000000000000000000000000001";
+      if (!intent.payoutAddress || !intent.payoutAddress.startsWith("0x")) {
+        throw new Error(`[ModularSessionKeyRail] INVALID_PAYOUT_ADDRESS: Rail 2 requires a valid 0x destination address. Received: '${intent.payoutAddress}'`);
+      }
+      const payout = intent.payoutAddress as `0x${string}`;
       const pubKey = `0x${crypto.createHash("sha256").update(`${intent.primaryAccountId}:${keyId}`).digest("hex")}`;
       record = await SessionKeyRepo.upsertSessionKey({
         session_key_id: keyId,
@@ -158,9 +168,28 @@ export class ModularSessionKeyRail {
       if (!confirmedTx) throw new Error(`Bundler accepted UserOperation ${userOpHash}, but it was not included within 20 seconds.`);
       transactionHash = confirmedTx;
     } else {
-      // Direct Arc L1 scoped session key execution
-      const hashBuffer = crypto.createHash("sha256").update(`ARC_USEROP:${keyId}:${intent.intentId}:${intent.amountUsdc}:${nowSec}`).digest();
-      transactionHash = `0x${hashBuffer.toString("hex")}` as `0x${string}`;
+      // Direct Arc L1 scoped session key execution via ArcTransactionExecutor
+      const executor = this.executor ?? new ArcTransactionExecutor();
+      const amountBigInt = BigInt(Math.floor(intent.amountUsdc * 1_000_000));
+      const execution = await executor.execute({
+        targetContract: ARC_CONSTANTS.USDC_PREDEPLOY,
+        abi: [
+          {
+            type: "function",
+            name: "transfer",
+            inputs: [
+              { name: "to", type: "address" },
+              { name: "amount", type: "uint256" },
+            ],
+            outputs: [{ name: "", type: "bool" }],
+            stateMutability: "nonpayable",
+          },
+        ],
+        functionName: "transfer",
+        args: [record.allowed_recipient as `0x${string}`, amountBigInt],
+        idempotencyKey: `0x${crypto.createHash("sha256").update(`SESSION_KEY:${keyId}:${intent.intentId}:${nowSec}`).digest("hex")}` as `0x${string}`,
+      });
+      transactionHash = execution.txHash;
     }
 
     // Update persistent cycle spending in PostgreSQL

@@ -78,7 +78,10 @@ export class FiatFundingService {
    */
   public async createFiatOnRampSession(params: FiatOnRampSessionParams): Promise<FiatOnRampSessionResult> {
     const account = await TreasuryAccountsRepo.getAccountById(params.accountId);
-    const targetAddress = account?.wallet_address || "0x9999999999999999999999999999999999999999";
+    if (!account || !account.wallet_address) {
+      throw new Error(`[FiatFundingService] ACCOUNT_WALLET_NOT_CONFIGURED: Account '${params.accountId}' does not have a configured wallet address.`);
+    }
+    const targetAddress = account.wallet_address;
     const chain = params.chain || "ARC";
     const sessionId = `fiat_onramp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
@@ -122,7 +125,10 @@ export class FiatFundingService {
    */
   public async getFiatWireInstructions(params: { accountId: string; currency?: "USD" | "EUR" }): Promise<FiatWireInstructionsResult> {
     const account = await TreasuryAccountsRepo.getAccountById(params.accountId);
-    const targetAddress = account?.wallet_address || "0x9999999999999999999999999999999999999999";
+    if (!account || !account.wallet_address) {
+      throw new Error(`[FiatFundingService] ACCOUNT_WALLET_NOT_CONFIGURED: Account '${params.accountId}' does not have a configured wallet address.`);
+    }
+    const targetAddress = account.wallet_address;
     const currency = params.currency || "USD";
     const depositTrackingMemo = `BIZARC-MINT-${params.accountId.toUpperCase()}-${targetAddress.slice(2, 10).toUpperCase()}`;
 

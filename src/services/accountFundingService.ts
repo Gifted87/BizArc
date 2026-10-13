@@ -144,7 +144,10 @@ export class AccountFundingService {
    */
   public async getFundingOptions(accountId: string): Promise<AccountFundingOptionsResult> {
     const account = await TreasuryAccountsRepo.getAccountById(accountId);
-    const targetAddress = account?.wallet_address || "0x9999999999999999999999999999999999999999";
+    if (!account || !account.wallet_address) {
+      throw new Error(`[AccountFundingService] ACCOUNT_WALLET_NOT_CONFIGURED: Account '${accountId}' does not have a configured wallet address.`);
+    }
+    const targetAddress = account.wallet_address;
     const accountRole = account?.role || "OPERATING";
     const trackingMemo = `BIZARC-MINT-${accountId.toUpperCase()}-${targetAddress.slice(2, 8).toUpperCase()}`;
 
@@ -225,7 +228,10 @@ export class AccountFundingService {
     expiresAt: string;
   }> {
     const account = await TreasuryAccountsRepo.getAccountById(params.accountId);
-    const targetAddress = account?.wallet_address || "0x9999999999999999999999999999999999999999";
+    if (!account || !account.wallet_address) {
+      throw new Error(`[AccountFundingService] ACCOUNT_WALLET_NOT_CONFIGURED: Account '${params.accountId}' does not have a configured wallet address.`);
+    }
+    const targetAddress = account.wallet_address;
     const sessionId = `fund_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
     const trackingMemo = `BIZARC-MINT-${params.accountId.toUpperCase()}-${sessionId.slice(5, 11).toUpperCase()}`;

@@ -249,7 +249,7 @@ export class ProductionReadinessService {
           vendorScore -= 15;
           warnings.push(`Pillar 6: Vendor ${v.vendor_id} does not have immutable change_lock active.`);
         }
-        if (!isAddress(v.verified_payout_address)) {
+        if (v.verified_payout_address && !isAddress(v.verified_payout_address)) {
           vendorScore -= 30;
           vendorReady = false;
           blockingIssues.push(`Pillar 6: Vendor ${v.vendor_id} has non-checksummed or invalid payout address.`);

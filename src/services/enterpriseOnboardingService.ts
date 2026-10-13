@@ -17,13 +17,29 @@ import { USDC_ABI } from "../foundation/usdc/usdcAbi.js";
 import { McpAppConnector } from "../connectors/mcpAppConnector.js";
 import { CompanyProfileRepo, CompanyProfileRecord } from "../database/repos/companyProfileRepo.js";
 import { MovementPolicyRepo } from "../database/repos/movementPolicyRepo.js";
+import { VendorBankRepo } from "../database/repos/vendorBankRepo.js";
+import { VendorPaymentPreferenceRepo } from "../database/repos/vendorPaymentPreferenceRepo.js";
+import { PaymentRailType, FiatSubMethodType } from "../payments/rails/types.js";
 import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
 import { PolicyLoader } from "../config/policyLoader.js";
 
 export interface ErpSupplierRecord {
   supplierId: string;
   name: string;
-  payoutAddress: `0x${string}`;
+  payoutAddress?: `0x${string}` | string | null;
+  bankDetails?: {
+    accountHolderName: string;
+    ibanOrAccountNumber: string;
+    routingOrSwift: string;
+    bankName?: string;
+    bankCountry?: string;
+    paymentSubMethod?: FiatSubMethodType | string;
+    cardToken?: string;
+    cardLast4?: string;
+    cardNetwork?: string;
+  };
+  preferredRail?: PaymentRailType;
+  preferredSubMethod?: FiatSubMethodType | string;
   taxId?: string;
   contactEmail?: string;
   authorizedCategory: string;
@@ -406,21 +422,62 @@ export class EnterpriseOnboardingService {
 
     const registeredVendors: VendorMasterRecord[] = [];
     for (const supplier of profile.discoveredSuppliers) {
+      const isFiat = supplier.preferredRail === "FIAT_PAYOUT" || !!supplier.bankDetails;
+      const effectiveRail: PaymentRailType = supplier.preferredRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT");
+
+      let bankAccountId: string | undefined;
+      if (supplier.bankDetails) {
+        const subMethod = supplier.preferredSubMethod || supplier.bankDetails.paymentSubMethod || (supplier.bankDetails.cardToken ? "PUSH_TO_CARD" : "FEDWIRE");
+        const bankRecord = await VendorBankRepo.createBankAccount({
+          vendor_id: supplier.supplierId,
+          account_holder_name: supplier.bankDetails.accountHolderName,
+          iban_account_number: supplier.bankDetails.ibanOrAccountNumber,
+          routing_swift: supplier.bankDetails.routingOrSwift || (subMethod === "PUSH_TO_CARD" ? "CARD_OCT" : "021000018"),
+          bank_name: supplier.bankDetails.bankName,
+          bank_country: supplier.bankDetails.bankCountry || "US",
+          payment_sub_method: subMethod,
+          card_token: supplier.bankDetails.cardToken || null,
+          card_last4: supplier.bankDetails.cardLast4 || (supplier.bankDetails.ibanOrAccountNumber.length === 16 ? supplier.bankDetails.ibanOrAccountNumber.slice(-4) : null),
+          card_network: supplier.bankDetails.cardNetwork || null,
+          is_verified: true,
+          verified_by_admin: "ENTERPRISE_ONBOARDING_AGENT",
+        });
+        bankAccountId = bankRecord.bank_account_id;
+      }
+
+      const verifiedAddress = supplier.payoutAddress && supplier.payoutAddress.startsWith("0x") && supplier.payoutAddress.length === 42
+        ? (supplier.payoutAddress as `0x${string}`)
+        : null;
+
       const record = await VendorMasterRepo.registerVendor({
         vendor_id: supplier.supplierId,
         name: supplier.name,
-        verified_payout_address: supplier.payoutAddress,
+        verified_payout_address: verifiedAddress,
         verified_by_admin: "ONBOARDING_AGENT",
         last_verified_at: new Date(),
         change_lock: true,
       });
       registeredVendors.push(record);
+
+      await VendorPaymentPreferenceRepo.setPreference({
+        vendor_id: supplier.supplierId,
+        preferred_rail: effectiveRail,
+        preferred_sub_method: supplier.preferredSubMethod || (supplier.bankDetails ? (supplier.bankDetails.paymentSubMethod as any) || "FEDWIRE" : null),
+        crypto_wallet_address: verifiedAddress,
+        crypto_chain_id: 5042,
+        crypto_token_symbol: "USDC",
+        bank_account_id: bankAccountId || null,
+      });
     }
 
     const scheduledLiabilities: LiabilityDbRecord[] = [];
     for (const inv of profile.discoveredLiabilities) {
       const supplier = profile.discoveredSuppliers.find((s) => s.supplierId === inv.supplierId);
-      const payoutAddress = supplier?.payoutAddress || ("0x0000000000000000000000000000000000000001" as `0x${string}`);
+      const isFiat = supplier?.preferredRail === "FIAT_PAYOUT" || !!supplier?.bankDetails;
+      const effectiveRail: PaymentRailType = supplier?.preferredRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT");
+      const payoutAddress = supplier?.payoutAddress && supplier.payoutAddress.startsWith("0x")
+        ? (supplier.payoutAddress as `0x${string}`)
+        : (isFiat ? null : ("0x0000000000000000000000000000000000000000" as `0x${string}`));
 
       const poHash = inv.purchaseOrderNumber
         ? keccak256(stringToHex(`PO:${inv.purchaseOrderNumber}:${inv.amountUsdc}`))
@@ -429,6 +486,8 @@ export class EnterpriseOnboardingService {
 
       const hasDeliveryProof = !!inv.deliveryReceiptProof;
       const initialStatus = hasDeliveryProof ? "SCHEDULED" : "UNMATCHED_DISPUTED";
+
+      const bankPref = await VendorPaymentPreferenceRepo.getPreference(inv.supplierId);
 
       const liability = await LiabilityRepo.createLiability({
         account_id: inv.costCenter,
@@ -442,6 +501,12 @@ export class EnterpriseOnboardingService {
         source_po_hash: poHash,
         source_invoice_hash: invoiceHash,
         status: initialStatus,
+        preferred_payment_rail: effectiveRail,
+        payment_sub_method: supplier?.preferredSubMethod || (supplier?.bankDetails ? (supplier.bankDetails.paymentSubMethod as any) || "FEDWIRE" : undefined),
+        payment_rail_config: {
+          beneficiaryBank: supplier?.bankDetails,
+          bankAccountId: bankPref?.bank_account_id || undefined,
+        },
       });
       scheduledLiabilities.push(liability);
     }

@@ -263,7 +263,7 @@ export class UniversalPaymentRouter {
       vendorRecord = await VendorMasterRepo.registerVendor({
         vendor_id: intent.vendorId,
         name: intent.vendorName,
-        verified_payout_address: (intent.payoutAddress && intent.payoutAddress.startsWith("0x") && intent.payoutAddress.length === 42 ? intent.payoutAddress : "0x0000000000000000000000000000000000000001") as `0x${string}`,
+        verified_payout_address: (intent.payoutAddress && intent.payoutAddress.startsWith("0x") && intent.payoutAddress.length === 42 ? intent.payoutAddress : null) as any,
         verified_by_admin: "UNIVERSAL_ROUTER_PRECHECK",
         last_verified_at: new Date(),
         change_lock: true,
@@ -277,7 +277,6 @@ export class UniversalPaymentRouter {
       intent.payoutAddress &&
       intent.payoutAddress.startsWith("0x") &&
       vendorRecord.verified_payout_address &&
-      vendorRecord.verified_payout_address !== "0x0000000000000000000000000000000000000001" &&
       vendorRecord.verified_payout_address.toLowerCase() !== intent.payoutAddress.toLowerCase()
     ) {
       return {

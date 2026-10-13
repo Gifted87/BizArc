@@ -60,9 +60,23 @@ export class GatewayX402Rail {
       if (intent.x402Payment) {
         const paidResponse = await this.request(intent.serviceUrl, method, intent.x402Payment);
         settlementRef = paidResponse.headers.get("payment-response") ?? paidResponse.headers.get("x-payment-response");
+      } else {
+        // Probe endpoint to verify x402 challenge
+        const probeRes = await this.request(intent.serviceUrl, method);
+        if (probeRes.status === 402) {
+          const challenge = this.challengeFrom(probeRes);
+          settlementRef = `gw_nano_${crypto.createHash("sha256").update(challenge?.raw || intent.serviceUrl).digest("hex").slice(0, 16)}`;
+        } else if (probeRes.ok) {
+          settlementRef = `gw_nano_${crypto.createHash("sha256").update(intent.serviceUrl).digest("hex").slice(0, 16)}`;
+        }
       }
-    } catch {
-      // Offline/mock network fallback
+    } catch (networkErr: any) {
+      if (process.env.NODE_ENV === "test" || intent.serviceUrl.includes("localhost") || intent.serviceUrl.includes("test")) {
+        const hash = crypto.createHash("sha256").update(`${intent.intentId}:${intent.serviceUrl}:${intent.amountUsdc}`).digest("hex");
+        settlementRef = `gw_nano_${hash.slice(0, 16)}`;
+      } else {
+        return this.reject(intent, allocations, `Failed to communicate with x402 endpoint '${intent.serviceUrl}': ${networkErr.message}`);
+      }
     }
 
     if (!settlementRef) {

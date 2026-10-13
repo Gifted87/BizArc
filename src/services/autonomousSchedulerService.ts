@@ -283,7 +283,7 @@ export class AutonomousSchedulerService {
         // COGNITIVE SWARM AGENT INFUSION (ID #103 & ID #104)
         // 1. Generate deterministic Keccak-256 idempotency key
         const proposedIdempotencyKey = this.swarm.routerAgent.generatePaymentIdempotencyKey(
-          liab.payout_address as `0x${string}`,
+          (liab.payout_address || "0x0000000000000000000000000000000000000000") as `0x${string}`,
           liab.source_invoice_hash || liab.title,
           BigInt(Math.round(Number(liab.amount_usdc) * 1e6))
         );
@@ -294,7 +294,7 @@ export class AutonomousSchedulerService {
           accountId: primaryAccount ? primaryAccount.account_id : liab.account_id,
           amountUsdc: Number(liab.amount_usdc).toFixed(6),
           declaredReason: `Scheduled autonomous settlement for liability '${liab.title}' to vendor '${liab.vendor_id}'`,
-          recipientAddress: liab.payout_address,
+          recipientAddress: liab.payout_address || undefined,
           vendorId: liab.vendor_id,
           idempotencyKey: proposedIdempotencyKey,
           liabilityId: liab.liability_id,

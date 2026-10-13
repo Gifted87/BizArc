@@ -4,6 +4,7 @@ import { LiabilityCategory, LiabilityStatus } from "../types/accounts.js";
 import { StandardizedPermissionRequest, SPROption, SPRActionType } from "../types/sprs.js";
 import { LiabilityRepo, LiabilityDbRecord } from "../database/repos/liabilityRepo.js";
 import { VendorMasterRepo } from "../database/repos/vendorMasterRepo.js";
+import { VendorBankRepo } from "../database/repos/vendorBankRepo.js";
 import { PermissionRequestRepo } from "../database/repos/permissionRequestRepo.js";
 import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
 import { AccountIntelligenceService } from "./accountIntelligenceService.js";
@@ -16,7 +17,10 @@ export interface InboundLiabilityDocumentInput {
   category: LiabilityCategory;
   amountUsdc: number;
   dueDate: Date | string;
-  claimedPayoutAddress: `0x${string}`;
+  claimedPayoutAddress?: `0x${string}` | string | null;
+  preferredPaymentRail?: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402" | "FIAT_PAYOUT" | string;
+  paymentSubMethod?: "FEDWIRE" | "ACH" | "PUSH_TO_CARD" | "SEPA" | "SWIFT" | string;
+  beneficiaryBank?: Record<string, any>;
   frequencyCron?: string;
   rawDocumentContent?: string;
   poHash?: `0x${string}`;
@@ -102,15 +106,27 @@ export class LiabilityRadarService {
       };
     }
 
-    // Rule 3: Vendor Master Check (Payee Substitution Protection)
+    // Rule 3: Vendor Master / Bank Check (Payee Substitution Protection)
     const vendorRecord = await VendorMasterRepo.getVendorById(input.vendorId);
     let securityAlert: string | undefined;
     let initialStatus: LiabilityStatus = "SCHEDULED";
 
+    const isFiat = input.preferredPaymentRail === "FIAT_PAYOUT" ||
+                   Boolean(input.beneficiaryBank) ||
+                   Boolean(input.paymentSubMethod) ||
+                   (input.claimedPayoutAddress ? !input.claimedPayoutAddress.startsWith("0x") : false);
+
     if (!vendorRecord) {
       securityAlert = `PAYEE_SUBSTITUTION_ALERT: Vendor '${input.vendorId}' is not registered in Verified Vendor Master.`;
       initialStatus = "FROZEN";
-    } else if (vendorRecord.verified_payout_address.toLowerCase() !== input.claimedPayoutAddress.toLowerCase()) {
+    } else if (isFiat) {
+      const bank = await VendorBankRepo.getVerifiedBankAccount(input.vendorId);
+      if (!bank && !input.beneficiaryBank) {
+        securityAlert = `FIAT_PAYEE_UNVERIFIED_ALERT: Vendor '${input.vendorId}' does not have a verified bank account for fiat payment.`;
+        initialStatus = "AWAITING_APPROVAL";
+      }
+    } else if (input.claimedPayoutAddress && vendorRecord.verified_payout_address &&
+               vendorRecord.verified_payout_address.toLowerCase() !== input.claimedPayoutAddress.toLowerCase()) {
       securityAlert = `PAYEE_SUBSTITUTION_ALERT: Claimed payout address ${input.claimedPayoutAddress} does NOT match verified address ${vendorRecord.verified_payout_address}.`;
       initialStatus = "FROZEN";
     }
@@ -145,10 +161,13 @@ export class LiabilityRadarService {
       amount_usdc: input.amountUsdc,
       due_date: dueDateParsed,
       frequency_cron: input.frequencyCron || null,
-      payout_address: input.claimedPayoutAddress,
+      payout_address: input.claimedPayoutAddress || null,
       source_po_hash: input.poHash || null,
       source_invoice_hash: invoiceHash,
       status: initialStatus,
+      preferred_payment_rail: input.preferredPaymentRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT"),
+      payment_sub_method: input.paymentSubMethod || null,
+      payment_rail_config: input.beneficiaryBank || {},
     });
 
     // Record audit event
@@ -157,7 +176,7 @@ export class LiabilityRadarService {
       action_type: "LIABILITY_INGESTED",
       amount_usdc: input.amountUsdc,
       is_autonomous: true,
-      counterparty_address: input.claimedPayoutAddress,
+      counterparty_address: input.claimedPayoutAddress || undefined,
       reason: securityAlert ?? anomalyReason ?? `Ingested and verified recurring obligation '${input.title}'`,
       pre_state_snapshot: { vendor: input.vendorId, invoiceHash },
       post_state_snapshot: { liabilityId: createdLiability.liability_id, status: initialStatus },
@@ -210,7 +229,7 @@ export class LiabilityRadarService {
 
       const vendor = await VendorMasterRepo.getVendorById(liability.vendor_id);
       const isVendorVerified = Boolean(vendor);
-      const payeeMatches = isVendorVerified && vendor!.verified_payout_address.toLowerCase() === liability.payout_address.toLowerCase();
+      const payeeMatches = isVendorVerified && Boolean(vendor?.verified_payout_address && liability.payout_address && vendor.verified_payout_address.toLowerCase() === liability.payout_address.toLowerCase());
 
       const options: SPROption[] = [
         {
@@ -249,7 +268,7 @@ export class LiabilityRadarService {
         targetRecipient: {
           vendorId: liability.vendor_id,
           vendorName: vendor?.name ?? liability.vendor_id,
-          payoutAddress: liability.payout_address,
+          payoutAddress: liability.payout_address ?? "",
           isInVerifiedMaster: isVendorVerified,
           payeeAddressMatchesHistory: payeeMatches,
         },

@@ -221,10 +221,8 @@ export class VendorMasterService {
     }
 
     // 2. Payee Substitution Protection (Rule 3)
-    if (
-      params.payoutAddress.toLowerCase() !==
-      vendor.verified_payout_address.toLowerCase()
-    ) {
+    const verifiedAddr = vendor.verified_payout_address?.toLowerCase();
+    if (verifiedAddr && params.payoutAddress.toLowerCase() !== verifiedAddr) {
       return {
         passed: false,
         rejectionReason: `PAYEE_SUBSTITUTION_DETECTED: Payout address ${params.payoutAddress} differs from verified master address ${vendor.verified_payout_address}.`,
@@ -263,8 +261,9 @@ export class VendorMasterService {
     }
 
     // 5. Generate Deterministic Idempotency Key
+    const payoutTarget = (vendor.verified_payout_address || params.payoutAddress) as `0x${string}`;
     const idempotencyKey = DisbursalVaultService.generateIdempotencyKey(
-      vendor.verified_payout_address,
+      payoutTarget,
       params.invoiceId,
       params.invoiceAmountUsdc
     );

@@ -1726,6 +1726,7 @@ export class ToolRegistry {
             args.isVerifiedInvoice ||
             !args.frequencyCron
           ) {
+            const isFiat = args.preferredPaymentRail === "FIAT_PAYOUT" || Boolean(args.bankDetails) || (Boolean(args.payoutAddress) && !args.payoutAddress.startsWith("0x"));
             const created = await LiabilityRepo.createLiability({
               company_id: args.companyId || "default_org",
               account_id: args.accountId,
@@ -1735,11 +1736,13 @@ export class ToolRegistry {
               amount_usdc: parseFloat(args.amountUsdc),
               due_date: new Date(args.dueDate || Date.now()),
               frequency_cron: args.frequencyCron || null,
-              payout_address: (args.payoutAddress || "0x0000000000000000000000000000000000000000") as `0x${string}`,
+              payout_address: args.payoutAddress || null,
               source_po_hash: args.poReference || null,
               source_invoice_hash: args.invoiceId || null,
               status: "SCHEDULED",
-              preferred_payment_rail: args.preferredPaymentRail || "DISBURSAL_VAULT",
+              preferred_payment_rail: args.preferredPaymentRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT"),
+              payment_sub_method: args.preferredSubMethod || args.bankDetails?.paymentSubMethod || null,
+              payment_rail_config: args.bankDetails || args.cryptoDetails || {},
             });
             return {
               success: true,
@@ -1754,6 +1757,7 @@ export class ToolRegistry {
 
           const result = await RecurringLiabilityService.addRecurringLiability({
             spec: {
+              companyId: args.companyId,
               accountId: args.accountId,
               vendorId: args.vendorId,
               title: args.title,
@@ -1763,6 +1767,10 @@ export class ToolRegistry {
               frequencyCron: args.frequencyCron,
               payoutAddress: args.payoutAddress,
               poReference: args.poReference,
+              preferredPaymentRail: args.preferredPaymentRail,
+              preferredSubMethod: args.preferredSubMethod,
+              bankDetails: args.bankDetails,
+              cryptoDetails: args.cryptoDetails,
             },
             proposedBy: args.proposedBy,
             rationale: args.rationale,
@@ -2044,7 +2052,7 @@ export class ToolRegistry {
         }
 
         case "convert_crypto_to_fiat_payout": {
-          const { sourceAccountId, amountUsdc, beneficiaryBank, invoiceReference } = args;
+          const { sourceAccountId, amountUsdc, beneficiaryBank, invoiceReference, vendorId, vendorName, adminSignature } = args;
           const parsedAmount = typeof amountUsdc === "number" ? amountUsdc : parseFloat(amountUsdc);
           if (isNaN(parsedAmount) || parsedAmount <= 0) {
             return {
@@ -2068,42 +2076,41 @@ export class ToolRegistry {
             };
           }
 
-          const tripartite = await this.dynamicRecords.getTripartiteBalance(sourceAccountId);
-          const available = parseFloat(tripartite.availableBalanceUsdc);
-          if (available < parsedAmount) {
-            return {
-              success: false,
-              error: `INSUFFICIENT_FUNDS: Account '${sourceAccountId}' has ${available} USDC, requested ${parsedAmount} USDC.`,
-            };
-          }
+          const router = new UniversalPaymentRouter();
+          const targetVendorId = vendorId || `vnd_fiat_${sourceAccountId}`;
+          const targetVendorName = vendorName || beneficiaryBank.accountHolderName || `Fiat Vendor (${targetVendorId})`;
 
-          const payoutId = `payout_${crypto.createHash("sha256").update(`${sourceAccountId}:${invoiceReference}:${parsedAmount}:${Date.now()}`).digest("hex").slice(0, 16)}`;
-          const usdcBurnTxHash = `0x${crypto.createHash("sha256").update(`BURN_${payoutId}`).digest("hex")}` as `0x${string}`;
-          const arrivalDate = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
-
-          const auditLog = await AuditLogRepo.appendAuditLog({
-            account_id: sourceAccountId,
-            action_type: "FIAT_PAYOUT_INITIATED",
-            amount_usdc: parsedAmount,
-            is_autonomous: true,
-            tx_hash: usdcBurnTxHash,
-            reason: `Circle Mint / Fedwire fiat payout initiated for invoice ${invoiceReference}`,
-            pre_state_snapshot: { availableBalanceUsdc: available },
-            post_state_snapshot: { availableBalanceUsdc: available - parsedAmount, payoutId },
-            actor_agent: "AUTONOMOUS_TREASURY_ORCHESTRATOR",
+          const disbursalResult = await router.routeAndExecute({
+            intent: {
+              intentId: `fiat_intent_${Date.now()}`,
+              vendorId: targetVendorId,
+              vendorName: targetVendorName,
+              amountUsdc: parsedAmount,
+              primaryAccountId: sourceAccountId,
+              declaredReason: `Fiat payout of $${parsedAmount.toFixed(2)} to ${targetVendorName}`,
+              beneficiaryBank: {
+                accountHolderName: beneficiaryBank.accountHolderName || targetVendorName,
+                ibanOrAccountNumber: beneficiaryBank.ibanOrAccountNumber,
+                routingOrSwift: beneficiaryBank.routingOrSwift,
+                bankCountry: beneficiaryBank.bankCountry || "US",
+                bankName: beneficiaryBank.bankName,
+                paymentSubMethod: beneficiaryBank.paymentSubMethod || "FEDWIRE",
+                cardToken: beneficiaryBank.cardToken,
+                cardLast4: beneficiaryBank.cardLast4,
+                cardNetwork: beneficiaryBank.cardNetwork,
+              },
+              invoiceId: invoiceReference || `INV_${Date.now()}`,
+            },
+            adminSignature: adminSignature ? (adminSignature as `0x${string}`) : undefined,
+            overrideRail: "FIAT_PAYOUT",
           });
 
           await this.dynamicRecords.calculateSafeToInvest(sourceAccountId);
 
           return {
-            success: true,
-            data: {
-              payoutId,
-              status: "INITIATED",
-              estimatedArrivalTimestamp: arrivalDate,
-              usdcBurnTxHash,
-              auditLogId: Number(auditLog.log_id || 0),
-            },
+            success: disbursalResult.success,
+            data: disbursalResult,
+            error: disbursalResult.error,
           };
         }
 

@@ -18,22 +18,28 @@ export class DynamicRecordsService {
     title: string;
     category?: string;
     amountUsdc: string; // Exact 6-decimal string
-    payoutAddress: string;
+    payoutAddress?: string | null;
     dueDate: Date;
     frequency?: LiabilityFrequency;
     documentHash: string;
     poReference?: string;
     status?: LiabilityStatus;
+    companyId?: string;
+    preferredPaymentRail?: string;
+    paymentSubMethod?: string;
+    paymentRailConfig?: Record<string, any>;
+    disbursalRules?: Record<string, any>;
   }): Promise<DynamicLiabilityRecord> {
     const rawAmount = this.parseUsdcToRaw(params.amountUsdc);
     const formattedAmount = this.formatRawToUsdc(rawAmount);
 
     const res = await DbClient.query(
       `INSERT INTO account_liabilities 
-        (account_id, vendor_id, title, category, amount_usdc, due_date, frequency_cron, payout_address, source_invoice_hash, source_po_hash, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING liability_id, account_id, vendor_id, title, amount_usdc, due_date, frequency_cron, payout_address, source_invoice_hash, source_po_hash, status, created_at, updated_at;`,
+        (company_id, account_id, vendor_id, title, category, amount_usdc, due_date, frequency_cron, payout_address, source_invoice_hash, source_po_hash, status, preferred_payment_rail, payment_sub_method, payment_rail_config, disbursal_rules)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       RETURNING liability_id, company_id, account_id, vendor_id, title, amount_usdc, due_date, frequency_cron, payout_address, source_invoice_hash, source_po_hash, status, preferred_payment_rail, payment_sub_method, payment_rail_config, disbursal_rules, created_at, updated_at;`,
       [
+        params.companyId || "default_org",
         params.accountId,
         params.vendorId,
         params.title,
@@ -41,10 +47,18 @@ export class DynamicRecordsService {
         formattedAmount,
         params.dueDate.toISOString(),
         params.frequency || "ONE_OFF",
-        params.payoutAddress,
+        params.payoutAddress || null,
         params.documentHash,
         params.poReference || null,
         params.status || "SCHEDULED",
+        params.preferredPaymentRail || "DISBURSAL_VAULT",
+        params.paymentSubMethod || null,
+        JSON.stringify(params.paymentRailConfig || {}),
+        JSON.stringify(params.disbursalRules || {
+          autoPayThresholdUsdc: 500,
+          requireThreeWayMatch: true,
+          preFlightLeadTimeHours: 48,
+        }),
       ]
     );
 
@@ -61,9 +75,7 @@ export class DynamicRecordsService {
     statuses: LiabilityStatus[] = ["SCHEDULED", "AWAITING_APPROVAL"]
   ): Promise<DynamicLiabilityRecord[]> {
     let sql = `
-      SELECT liability_id, account_id, vendor_id, title, amount_usdc, due_date, 
-             frequency_cron, payout_address, source_invoice_hash, source_po_hash, 
-             status, created_at, updated_at
+      SELECT *
       FROM account_liabilities
       WHERE account_id = $1 AND status = ANY($2::text[])
     `;
@@ -278,6 +290,7 @@ export class DynamicRecordsService {
     const raw = this.parseUsdcToRaw(row.amount_usdc);
     return {
       liabilityId: row.liability_id,
+      companyId: row.company_id || "default_org",
       accountId: row.account_id,
       vendorId: row.vendor_id,
       vendorTitle: row.title || row.vendor_id,
@@ -289,6 +302,10 @@ export class DynamicRecordsService {
       documentHash: row.source_invoice_hash || "",
       poReference: row.source_po_hash || undefined,
       status: row.status as LiabilityStatus,
+      preferredPaymentRail: row.preferred_payment_rail || "DISBURSAL_VAULT",
+      paymentSubMethod: row.payment_sub_method || undefined,
+      paymentRailConfig: typeof row.payment_rail_config === "object" ? row.payment_rail_config : undefined,
+      disbursalRules: typeof row.disbursal_rules === "object" ? row.disbursal_rules : undefined,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
     };

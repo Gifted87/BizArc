@@ -27,7 +27,7 @@ export class DebounceEngine {
   }
 
   public isInternalSettlement(from: string, to: string): boolean {
-    return this.isInternalAddress(from) || this.isInternalAddress(to);
+    return this.isInternalAddress(from) && this.isInternalAddress(to);
   }
 
   /**

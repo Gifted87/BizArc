@@ -28,7 +28,10 @@ export class DisbursalVaultRail {
     allocations: Array<{ accountId: string; amountUsdc: number; isPrimary: boolean }>,
     adminSignature?: `0x${string}`
   ): Promise<UniversalDisbursalExecutionResult> {
-    const payoutAddress = getAddress(intent.payoutAddress || "0x0000000000000000000000000000000000000001") as `0x${string}`;
+    if (!intent.payoutAddress || !intent.payoutAddress.startsWith("0x")) {
+      throw new Error(`[DisbursalVaultRail] INVALID_PAYOUT_ADDRESS: Rail 1 requires a valid 0x destination address. Received: '${intent.payoutAddress}'`);
+    }
+    const payoutAddress = getAddress(intent.payoutAddress) as `0x${string}`;
     const invoiceId = intent.invoiceId || `INV_${Date.now()}`;
     const amountBigInt = BigInt(Math.floor(intent.amountUsdc * 1_000_000));
 

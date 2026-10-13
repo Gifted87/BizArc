@@ -16,6 +16,7 @@ import { TreasuryStateMachineOrchestrator } from "../orchestration/treasuryState
 import { TokenSwapService } from "../services/tokenSwapService.js";
 import { FiatFundingService } from "../services/fiatFundingService.js";
 import { LiabilitySettingsService } from "../services/liabilitySettingsService.js";
+import { LiabilityManagementService } from "../services/liabilityManagementService.js";
 import { ManualDisbursalService } from "../services/manualDisbursalService.js";
 import { AccountFundingService } from "../services/accountFundingService.js";
 import { UniversalPaymentRouter } from "../payments/universalPaymentRouter.js";
@@ -29,6 +30,7 @@ export class SystemHttpServer {
   private swapService: TokenSwapService;
   private fiatFundingService: FiatFundingService;
   private liabilitySettingsService: LiabilitySettingsService;
+  private liabilityManagementService: LiabilityManagementService;
   private manualDisbursalService: ManualDisbursalService;
   private accountFundingService: AccountFundingService;
   private port: number;
@@ -39,6 +41,7 @@ export class SystemHttpServer {
     this.swapService = new TokenSwapService();
     this.fiatFundingService = new FiatFundingService();
     this.liabilitySettingsService = new LiabilitySettingsService();
+    this.liabilityManagementService = new LiabilityManagementService();
     this.manualDisbursalService = new ManualDisbursalService();
     this.accountFundingService = new AccountFundingService();
     this.port = port;
@@ -417,6 +420,67 @@ export class SystemHttpServer {
       }
 
       return this.sendJson(req, res, 200, { success: true, received: true });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // LIABILITIES REST CRUD
+    // ─────────────────────────────────────────────────────────────────────────────
+    if (pathname === "/api/liabilities" && method === "POST") {
+      const body = await this.parseBody(req);
+      const companyId = body.companyId || url.searchParams.get("companyId") || "default_org";
+      try {
+        const liability = await this.liabilityManagementService.createLiability(companyId, body);
+        return this.sendJson(req, res, 201, { success: true, data: liability });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname === "/api/liabilities" && method === "GET") {
+      const companyId = url.searchParams.get("companyId") || "default_org";
+      const accountId = url.searchParams.get("accountId") || undefined;
+      const status = (url.searchParams.get("status") as any) || undefined;
+      try {
+        const liabilities = await this.liabilityManagementService.listLiabilities(companyId, { accountId, status });
+        return this.sendJson(req, res, 200, { success: true, data: liabilities });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname.startsWith("/api/liabilities/") && !pathname.endsWith("/payment-method")) {
+      const parts = pathname.split("/");
+      const liabilityId = parts[3];
+      const companyId = url.searchParams.get("companyId") || "default_org";
+
+      if (method === "PUT") {
+        const body = await this.parseBody(req);
+        try {
+          const updated = await this.liabilityManagementService.updateLiability(
+            body.companyId || companyId,
+            liabilityId,
+            body
+          );
+          return this.sendJson(req, res, 200, { success: true, data: updated });
+        } catch (err: any) {
+          return this.sendJson(req, res, 400, { success: false, error: err.message });
+        }
+      }
+
+      if (method === "DELETE") {
+        const body = await this.parseBody(req).catch(() => ({}));
+        const adminInstruction = body.adminInstruction || body.reason || "Cancelled via REST API";
+        try {
+          const cancelled = await this.liabilityManagementService.cancelLiability(
+            body.companyId || companyId,
+            liabilityId,
+            adminInstruction
+          );
+          return this.sendJson(req, res, 200, { success: true, data: cancelled });
+        } catch (err: any) {
+          return this.sendJson(req, res, 400, { success: false, error: err.message });
+        }
+      }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

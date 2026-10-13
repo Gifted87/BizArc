@@ -14,6 +14,7 @@ import { AutonomousSchedulerService } from "../services/autonomousSchedulerServi
 import { TreasuryStateMachineOrchestrator } from "../orchestration/treasuryStateMachineOrchestrator.js";
 import { TreasuryAccountsRepo } from "../database/repos/treasuryAccountsRepo.js";
 import { BalanceMutationEvent } from "../services/treasurySentinelService.js";
+import { AccountFundingService } from "../services/accountFundingService.js";
 
 export interface TreasuryDaemonOptions {
   httpPort?: number;
@@ -27,11 +28,15 @@ export class TreasuryDaemon {
   public readonly httpServer: SystemHttpServer;
   public readonly arcListener?: ArcEventListener;
   public readonly scheduler?: AutonomousSchedulerService;
+  public readonly accountFundingService: AccountFundingService;
   private isRunning = false;
 
   constructor(options?: TreasuryDaemonOptions) {
     this.orchestrator = new TreasuryStateMachineOrchestrator();
     this.httpServer = new SystemHttpServer(this.orchestrator, options?.httpPort ?? 3000);
+    this.accountFundingService = new AccountFundingService({
+      dynamicRecords: (this.orchestrator as any).dynamicRecords,
+    });
 
     if (options?.enableBlockchainListener !== false) {
       this.arcListener = new ArcEventListener();
@@ -74,6 +79,21 @@ export class TreasuryDaemon {
         await this.arcListener.startListening(async (accountId, rawEvents) => {
           const totalAmountUsdc = rawEvents.reduce((acc, e) => acc + Number(e.amount) / 1e6, 0);
           const firstEvent = rawEvents[0];
+
+          // Reconcile onchain native Arc deposit into account ledger & dynamic records
+          if (totalAmountUsdc > 0 && firstEvent) {
+            try {
+              await this.accountFundingService.reconcileDeposit({
+                accountId,
+                amountUsdc: totalAmountUsdc,
+                depositReference: firstEvent.txHash,
+                method: "CRYPTO_ARC_NATIVE",
+                sourceTxHash: firstEvent.txHash,
+              });
+            } catch (err: any) {
+              console.warn(`[TreasuryDaemon] Failed to reconcile deposit for account '${accountId}': ${err.message}`);
+            }
+          }
 
           const mutationEvent: BalanceMutationEvent = {
             accountId,

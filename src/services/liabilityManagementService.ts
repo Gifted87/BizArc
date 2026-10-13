@@ -111,16 +111,16 @@ export class LiabilityManagementService implements ILiabilityManagementService {
       bankAccountId = bankRecord.bank_account_id;
     }
 
-    let payoutAddr = params.payoutAddress || params.cryptoDetails?.walletAddress;
+    let payoutAddr: string | undefined = params.payoutAddress || params.cryptoDetails?.walletAddress;
     if (!payoutAddr || typeof payoutAddr !== "string" || !payoutAddr.startsWith("0x") || payoutAddr.length !== 42) {
-      payoutAddr = isFiat ? (bankAccountId || params.vendorId) : "0x0000000000000000000000000000000000000001";
+      payoutAddr = isFiat ? (bankAccountId || params.vendorId) : undefined;
     }
 
     // Register Vendor in Vendor Master Registry
     await VendorMasterRepo.registerVendor({
       vendor_id: params.vendorId,
       name: params.vendorName || params.vendorId,
-      verified_payout_address: payoutAddr.startsWith("0x") ? (payoutAddr as `0x${string}`) : ("0x0000000000000000000000000000000000000001" as `0x${string}`),
+      verified_payout_address: payoutAddr && payoutAddr.startsWith("0x") ? (payoutAddr as `0x${string}`) : null,
       verified_by_admin: "LIABILITY_MANAGEMENT_SERVICE",
       last_verified_at: new Date(),
       change_lock: true,
@@ -131,7 +131,7 @@ export class LiabilityManagementService implements ILiabilityManagementService {
       vendor_id: params.vendorId,
       preferred_rail: effectiveRail,
       preferred_sub_method: params.preferredSubMethod || null,
-      crypto_wallet_address: params.cryptoDetails?.walletAddress || (payoutAddr.startsWith("0x") ? payoutAddr : null),
+      crypto_wallet_address: params.cryptoDetails?.walletAddress || (payoutAddr && payoutAddr.startsWith("0x") ? payoutAddr : null),
       crypto_chain_id: params.cryptoDetails?.chainId ?? 5042,
       crypto_token_symbol: params.cryptoDetails?.tokenSymbol || "USDC",
       bank_account_id: bankAccountId || null,

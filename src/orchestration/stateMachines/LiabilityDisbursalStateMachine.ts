@@ -146,7 +146,7 @@ export class LiabilityDisbursalStateMachine {
         title: liability.title,
         amountUsdc: amountUsdc.toFixed(6),
         vendorId: liability.vendor_id,
-        payoutAddress: liability.payout_address,
+        payoutAddress: liability.payout_address || undefined,
         category: liability.category || "SAAS",
         preferredPaymentRail: liability.preferred_payment_rail || "DISBURSAL_VAULT",
         beneficiaryBankDetails: liability.payment_rail_config,
@@ -154,7 +154,7 @@ export class LiabilityDisbursalStateMachine {
 
       // 4. Policy Compliance Gate with Keccak-256 Idempotency Key
       const idempotencyKey = this.routerAgent.generatePaymentIdempotencyKey(
-        liability.payout_address as `0x${string}`,
+        (liability.payout_address || "0x0000000000000000000000000000000000000000") as `0x${string}`,
         liability.source_invoice_hash || liability.title,
         BigInt(Math.round(amountUsdc * 1e6))
       );
@@ -164,7 +164,7 @@ export class LiabilityDisbursalStateMachine {
         accountId: liability.account_id,
         amountUsdc: amountUsdc.toFixed(6),
         declaredReason: `Scheduled disbursal for ${liability.title} to ${liability.vendor_id}`,
-        recipientAddress: liability.payout_address,
+        recipientAddress: liability.payout_address || undefined,
         vendorId: liability.vendor_id,
         idempotencyKey,
         liabilityId: liability.liability_id,

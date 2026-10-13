@@ -191,6 +191,11 @@ export class AdHocPaymentStateMachine {
         ? "MODULAR_SESSION_KEY"
         : (rawRail as PaymentRailType);
 
+      const targetWallet = req.recipientAddress || req.cryptoDetails?.walletAddress;
+      if (normalizedRail !== "FIAT_PAYOUT" && (!targetWallet || !targetWallet.startsWith("0x"))) {
+        throw new Error(`[AdHocPaymentStateMachine] CRYPTO_WALLET_REQUIRED: Payment rail '${normalizedRail}' requires a valid 0x recipient address.`);
+      }
+
       const disbursalResult = await manualDisbursalService.executeManualDisbursal({
         companyId: req.companyId,
         sourceAccountId: selectedAccount.account_id,
@@ -200,7 +205,7 @@ export class AdHocPaymentStateMachine {
         paymentRail: normalizedRail,
         fiatDetails: req.beneficiaryBank,
         cryptoDetails: {
-          walletAddress: (req.recipientAddress || req.cryptoDetails?.walletAddress || "0x0000000000000000000000000000000000000001") as `0x${string}`,
+          walletAddress: (targetWallet || undefined) as `0x${string}`,
           chainId: req.cryptoDetails?.chainId,
           tokenSymbol: req.cryptoDetails?.tokenSymbol,
           targetChain: req.cryptoDetails?.targetChain,

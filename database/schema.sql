@@ -542,6 +542,9 @@ ALTER TABLE account_liabilities
     ALTER COLUMN payout_address DROP NOT NULL;
 
 ALTER TABLE account_liabilities
+    ALTER COLUMN payout_address TYPE VARCHAR(255);
+
+ALTER TABLE account_liabilities
     ADD COLUMN IF NOT EXISTS payment_sub_method VARCHAR(32);
 
 CREATE INDEX IF NOT EXISTS idx_liabilities_sub_method ON account_liabilities(payment_sub_method);
@@ -569,3 +572,6 @@ CREATE INDEX IF NOT EXISTS idx_vendor_pref_rail ON vendor_payment_preferences(pr
 ALTER TABLE fiat_deposit_sessions
     ADD COLUMN IF NOT EXISTS source_chain VARCHAR(32),
     ADD COLUMN IF NOT EXISTS source_token VARCHAR(64);
+
+ALTER TABLE vendor_master_registry
+    ALTER COLUMN verified_payout_address DROP NOT NULL;

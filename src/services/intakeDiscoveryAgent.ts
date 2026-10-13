@@ -21,6 +21,8 @@ import { IVendorTransport } from "../connectors/vendorBillingTypes.js";
 import { IGoogleWorkspaceMcpTransport } from "../connectors/googleWorkspaceMcpClient.js";
 import { IMicrosoft365McpTransport } from "../connectors/microsoft365McpClient.js";
 
+import { VendorBankRepo } from "../database/repos/vendorBankRepo.js";
+
 export interface DiscoveredCostCenterCandidate {
   tag: string;
   name: string;
@@ -38,10 +40,11 @@ export interface DiscoveredLiabilityCandidate {
   payoutAddress: string;
   poNumber?: string;
   costCenterTag: string;
-  optimalRail: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402";
+  optimalRail: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402" | "FIAT_PAYOUT";
   payeeVerified: boolean;
   stealthCreepDetected: boolean;
   stealthCreepClause?: string;
+  beneficiaryBank?: any;
 }
 
 export interface IntakeSynthesisResult {
@@ -202,6 +205,25 @@ export class IntakeDiscoveryAgent {
             sourceSystem: "ODOO",
           });
         }
+        if (Array.isArray(odooSync.discoveredLiabilities)) {
+          for (const l of odooSync.discoveredLiabilities) {
+            const vendorId = `vnd_${l.vendorName.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+            const isVerified = await this.verifyPayee(vendorId, l.vendorName);
+            liabilities.push({
+              invoiceId: l.invoiceId,
+              vendorName: l.vendorName,
+              vendorId,
+              amountUsdc: l.amountUsdc,
+              dueDate: l.dueDate,
+              payoutAddress: `BANK_${vendorId.toUpperCase()}`,
+              poNumber: l.poNumber,
+              costCenterTag: l.costCenterTag,
+              optimalRail: "FIAT_PAYOUT",
+              payeeVerified: isVerified,
+              stealthCreepDetected: false,
+            });
+          }
+        }
       }
 
       const erpNextSync: ErpSyncResult = await SessionErpSyncService.syncErpNext(this.companyId);
@@ -215,6 +237,25 @@ export class IntakeDiscoveryAgent {
             dimensionSource: "ERPNext Cost Center Hierarchy",
             sourceSystem: "ERPNEXT",
           });
+        }
+        if (Array.isArray(erpNextSync.discoveredLiabilities)) {
+          for (const l of erpNextSync.discoveredLiabilities) {
+            const vendorId = `vnd_${l.vendorName.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+            const isVerified = await this.verifyPayee(vendorId, l.vendorName);
+            liabilities.push({
+              invoiceId: l.invoiceId,
+              vendorName: l.vendorName,
+              vendorId,
+              amountUsdc: l.amountUsdc,
+              dueDate: l.dueDate,
+              payoutAddress: `BANK_${vendorId.toUpperCase()}`,
+              poNumber: l.poNumber,
+              costCenterTag: l.costCenterTag,
+              optimalRail: "FIAT_PAYOUT",
+              payeeVerified: isVerified,
+              stealthCreepDetected: false,
+            });
+          }
         }
       }
     } catch (err: any) {
@@ -279,12 +320,30 @@ export class IntakeDiscoveryAgent {
   }
 
   /**
-   * Rule 3 Payee Verification against VendorMasterRepo.
+   * Rule 3 Payee Verification against VendorMasterRepo and VendorBankRepo.
    */
-  private async verifyPayee(payoutAddress: string, vendorName?: string): Promise<boolean> {
-    if (!payoutAddress || !payoutAddress.startsWith("0x")) return false;
-    const existing = await VendorMasterRepo.getVendorByAddress(payoutAddress);
-    return Boolean(existing);
+  private async verifyPayee(addressOrVendorId?: string, vendorName?: string): Promise<boolean> {
+    if (addressOrVendorId && addressOrVendorId.startsWith("0x")) {
+      const existing = await VendorMasterRepo.getVendorByAddress(addressOrVendorId);
+      if (existing) return true;
+    }
+
+    if (addressOrVendorId) {
+      const byId = await VendorMasterRepo.getVendorById(addressOrVendorId);
+      if (byId) return true;
+      const bankById = await VendorBankRepo.getVerifiedBankAccount(addressOrVendorId);
+      if (bankById) return true;
+    }
+
+    if (vendorName) {
+      const byName = await VendorMasterRepo.getVendorByName(vendorName);
+      if (byName) return true;
+      const byNameId = `vnd_${vendorName.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+      const bankByNameId = await VendorBankRepo.getVerifiedBankAccount(byNameId);
+      if (bankByNameId) return true;
+    }
+
+    return false;
   }
 
   /**

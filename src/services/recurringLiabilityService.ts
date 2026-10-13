@@ -2,10 +2,13 @@ import { DbClient } from "../database/dbClient.js";
 import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
 import { PermissionRequestRepo } from "../database/repos/permissionRequestRepo.js";
 import { VendorMasterRepo } from "../database/repos/vendorMasterRepo.js";
+import { VendorBankRepo } from "../database/repos/vendorBankRepo.js";
+import { VendorPaymentPreferenceRepo } from "../database/repos/vendorPaymentPreferenceRepo.js";
 import { AuthorizationGate } from "../security/authorizationGate.js";
 
 export interface RecurringLiabilitySpec {
   liabilityId?: string;
+  companyId?: string;
   accountId: string;
   vendorId: string;
   title: string;
@@ -13,9 +16,13 @@ export interface RecurringLiabilitySpec {
   amountUsdc: string;
   dueDate: Date;
   frequencyCron: string;
-  payoutAddress?: string;
+  payoutAddress?: string | null;
   poReference?: string;
   documentHash?: string;
+  preferredPaymentRail?: string;
+  preferredSubMethod?: string;
+  bankDetails?: Record<string, any>;
+  cryptoDetails?: Record<string, any>;
 }
 
 export class RecurringLiabilityService {
@@ -40,12 +47,51 @@ export class RecurringLiabilityService {
     const { spec, proposedBy, rationale, sprsRequestId, adminSignature } = params;
 
     // 1. Verify vendor is registered in Vendor Master Registry
-    const vendor = await VendorMasterRepo.getVendorById(spec.vendorId);
+    let vendor = await VendorMasterRepo.getVendorById(spec.vendorId);
+    let payoutAddress = spec.payoutAddress || vendor?.verified_payout_address || null;
+    const isFiat = spec.preferredPaymentRail === "FIAT_PAYOUT" || Boolean(spec.bankDetails) || (payoutAddress ? !payoutAddress.startsWith("0x") : false);
+
     if (!vendor) {
-      throw new Error(`[RecurringLiabilityService] Vendor ${spec.vendorId} is not registered in Vendor Master Registry.`);
+      if (isFiat || spec.bankDetails) {
+        vendor = await VendorMasterRepo.registerVendor({
+          vendor_id: spec.vendorId,
+          name: spec.vendorId,
+          verified_payout_address: payoutAddress && payoutAddress.startsWith("0x") ? (payoutAddress as `0x${string}`) : null,
+          verified_by_admin: "RECURRING_LIABILITY_SERVICE",
+          last_verified_at: new Date(),
+          change_lock: true,
+        });
+      } else {
+        throw new Error(`[RecurringLiabilityService] Vendor ${spec.vendorId} is not registered in Vendor Master Registry.`);
+      }
     }
 
-    const payoutAddress = spec.payoutAddress || vendor.verified_payout_address;
+    let bankAccountId: string | undefined;
+    if (spec.bankDetails) {
+      const bankRecord = await VendorBankRepo.createBankAccount({
+        vendor_id: spec.vendorId,
+        account_holder_name: spec.bankDetails.accountHolderName || spec.vendorId,
+        iban_account_number: spec.bankDetails.ibanOrAccountNumber || spec.bankDetails.ibanAccountNumber || "UNKNOWN",
+        routing_swift: spec.bankDetails.routingOrSwift || spec.bankDetails.routingSwift || "000000000",
+        bank_name: spec.bankDetails.bankName,
+        bank_country: spec.bankDetails.bankCountry || "US",
+        payment_sub_method: spec.preferredSubMethod || spec.bankDetails.paymentSubMethod || "FEDWIRE",
+        is_verified: true,
+      });
+      bankAccountId = bankRecord.bank_account_id;
+    }
+
+    if (spec.preferredPaymentRail || spec.preferredSubMethod || spec.bankDetails || spec.cryptoDetails) {
+      await VendorPaymentPreferenceRepo.setPreference({
+        vendor_id: spec.vendorId,
+        preferred_rail: (spec.preferredPaymentRail as any) || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT"),
+        preferred_sub_method: spec.preferredSubMethod || null,
+        bank_account_id: bankAccountId || null,
+        crypto_wallet_address: spec.cryptoDetails?.walletAddress || (payoutAddress && payoutAddress.startsWith("0x") ? payoutAddress : null),
+        crypto_chain_id: spec.cryptoDetails?.chainId ?? 5042,
+        crypto_token_symbol: spec.cryptoDetails?.tokenSymbol || "USDC",
+      });
+    }
 
     // 2. Check Layer 2 Human Authorization
     const authCheck = await AuthorizationGate.verifyAuthorization({
@@ -79,6 +125,7 @@ export class RecurringLiabilityService {
 
     // 3. Commit to Dynamic Record 1 (account_liabilities)
     const liability = await this.dynamicRecords.upsertLiability({
+      companyId: spec.companyId,
       accountId: spec.accountId,
       vendorId: spec.vendorId,
       title: spec.title,
@@ -86,10 +133,13 @@ export class RecurringLiabilityService {
       amountUsdc: spec.amountUsdc,
       dueDate: spec.dueDate,
       frequency: spec.frequencyCron as any,
-      payoutAddress,
+      payoutAddress: payoutAddress || undefined,
       documentHash: spec.documentHash || `HASH_${Date.now()}`,
       poReference: spec.poReference,
       status: "SCHEDULED",
+      preferredPaymentRail: (spec.preferredPaymentRail as any) || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT"),
+      paymentSubMethod: spec.preferredSubMethod || undefined,
+      paymentRailConfig: spec.bankDetails || spec.cryptoDetails || {},
     });
 
     // 4. Recalculate Dynamic Record 2 (Safe-to-Invest & Tripartite Balance)

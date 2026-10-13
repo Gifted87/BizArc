@@ -94,7 +94,7 @@ export class DisbursalRouter {
       vendorId: liability.vendor_id,
       vendorName: liability.title,
       amountUsdc: liability.amount_usdc,
-      payoutAddress: liability.payout_address,
+      payoutAddress: liability.payout_address || undefined,
       serviceUrl,
       declaredReason: `Disbursal for '${liability.title}' ($${liability.amount_usdc.toFixed(6)} USDC) via ${rail}.`,
       invoiceId: liability.title,

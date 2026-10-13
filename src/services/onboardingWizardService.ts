@@ -262,7 +262,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
             amountUsdc: amountNum,
             dueDate: liab.dueDate ? new Date(liab.dueDate).toISOString() : new Date(Date.now() + 14 * 86400 * 1000).toISOString(),
             frequencyCron: liab.frequencyCron || "0 0 1 * *",
-            payoutAddress: liab.payoutAddress || (rail === "FIAT_PAYOUT" ? null : "0x0000000000000000000000000000000000000001"),
+            payoutAddress: liab.payoutAddress || null,
             serviceUrl: liab.serviceUrl || liab.cryptoDetails?.serviceEndpointUrl || null,
             poReference: liab.poReference || null,
             preferredPaymentRail: rail,
@@ -366,7 +366,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
         amountUsdc: Number(inv.amountUsdc || inv.amount || 100.0),
         dueDate: inv.dueDate ? new Date(inv.dueDate).toISOString() : new Date(Date.now() + 14 * 86400 * 1000).toISOString(),
         frequencyCron: inv.frequencyCron || "0 0 1 * *",
-        payoutAddress: inv.payoutAddress || "0x0000000000000000000000000000000000000001",
+        payoutAddress: inv.payoutAddress || null,
         serviceUrl: inv.serviceUrl || null,
         poReference: inv.purchaseOrderNumber || inv.poReference || null,
         preferredPaymentRail: inv.serviceUrl ? "GATEWAY_X402" : "DISBURSAL_VAULT",
@@ -536,14 +536,14 @@ export class OnboardingWizardService implements IOnboardingWizardService {
         // 3b. Determine Verified Payout Address for Vendor Master
         let payoutAddr = liab.payoutAddress;
         if (!payoutAddr || typeof payoutAddr !== "string" || !payoutAddr.startsWith("0x") || payoutAddr.length !== 42) {
-          payoutAddr = liab.cryptoDetails?.walletAddress || "0x0000000000000000000000000000000000000001";
+          payoutAddr = liab.cryptoDetails?.walletAddress || null;
         }
 
         // Register in Vendor Master Registry
         await VendorMasterRepo.registerVendor({
           vendor_id: liab.vendorId,
           name: liab.vendorName || liab.vendorId,
-          verified_payout_address: payoutAddr as `0x${string}`,
+          verified_payout_address: payoutAddr && payoutAddr.startsWith("0x") ? (payoutAddr as `0x${string}`) : null,
           verified_by_admin: "ONBOARDING_WIZARD",
           last_verified_at: new Date(),
           change_lock: true,
@@ -554,7 +554,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
           vendor_id: liab.vendorId,
           preferred_rail: liab.preferredPaymentRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT"),
           preferred_sub_method: liab.preferredSubMethod || null,
-          crypto_wallet_address: liab.cryptoDetails?.walletAddress || (payoutAddr !== "0x0000000000000000000000000000000000000001" ? payoutAddr : null),
+          crypto_wallet_address: liab.cryptoDetails?.walletAddress || (payoutAddr && payoutAddr.startsWith("0x") ? payoutAddr : null),
           crypto_chain_id: liab.cryptoDetails?.chainId ?? 5042,
           crypto_token_symbol: liab.cryptoDetails?.tokenSymbol || "USDC",
           bank_account_id: bankAccountId || null,
