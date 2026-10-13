@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { UniversalDisbursalIntent, UniversalDisbursalExecutionResult } from "./types.js";
+import { UniversalDisbursalIntent, UniversalDisbursalExecutionResult, FiatSubMethodType } from "./types.js";
 import { VendorMasterRepo } from "../../database/repos/vendorMasterRepo.js";
 import { VendorBankRepo } from "../../database/repos/vendorBankRepo.js";
 import { FiatPayoutRepo } from "../../database/repos/fiatPayoutRepo.js";
@@ -12,22 +12,33 @@ export interface BeneficiaryBankDetails {
   routingOrSwift: string;
   bankCountry: string;
   bankName?: string;
+  paymentSubMethod?: FiatSubMethodType | string;
+  cardToken?: string;
+  cardLast4?: string;
+  cardNetwork?: string;
 }
 
 export interface FiatPayoutExecutionConfig {
   singleTxHumanGateThresholdUsdc?: number;
-  fiatSettlementMethod?: "FEDWIRE" | "ACH" | "SEPA" | "SWIFT";
+  fiatSettlementMethod?: FiatSubMethodType;
 }
 
 /**
- * Rail 5: Circle Mint / Fedwire Traditional Banking Settlement Rail.
+ * Rail 5: Circle Mint / Multi-Rail Traditional Banking Settlement Rail.
  *
  * Implements Sentence 30 of the BizArc architecture:
- * Initiates Circle Mint Payout / Fedwire / ACH to settle traditional invoices
- * when corporate vendors do not accept cryptocurrency.
+ * Initiates Circle Mint Payout / Fedwire / ACH / Push-to-Card / SEPA to settle traditional invoices
+ * when corporate vendors or contractors do not accept cryptocurrency.
+ *
+ * Supported Fiat Sub-Methods:
+ * 1. FEDWIRE: Domestic high-value wire transfers (BNY Mellon / Fedwire, same-day settlement).
+ * 2. ACH: Standard or Same-Day automated clearing house for routine vendor billing.
+ * 3. PUSH_TO_CARD: Real-time (<5 min) payouts directly to 16-digit debit cards (Visa Direct / Mastercard Send / OCT).
+ * 4. SEPA / SEPA INSTANT: Eurozone EUR/EURC instant payouts.
+ * 5. SWIFT: Cross-border international commercial wires.
  *
  * Guardrails enforced:
- * 1. Beneficiary Bank Verification: Ensures complete banking credentials and persists in VendorBankRepo.
+ * 1. Beneficiary Bank / Card Verification: Ensures complete banking credentials and persists in VendorBankRepo.
  * 2. Payee Substitution Defense: Verifies beneficiary against immutable Vendor Master and Bank Registry.
  * 3. Human SPRS Escalation: Escalates transactions exceeding policy thresholds to PermissionRequestRepo
  *    unless authorized via CFO EIP-712 cryptographic signature.
@@ -35,9 +46,11 @@ export interface FiatPayoutExecutionConfig {
  */
 export class FiatPayoutRail {
   private humanGateThresholdUsdc: number;
+  private defaultSubMethod: FiatSubMethodType;
 
   constructor(config?: FiatPayoutExecutionConfig) {
     this.humanGateThresholdUsdc = config?.singleTxHumanGateThresholdUsdc ?? 500.0;
+    this.defaultSubMethod = config?.fiatSettlementMethod ?? "FEDWIRE";
   }
 
   public async execute(
@@ -47,7 +60,7 @@ export class FiatPayoutRail {
   ): Promise<UniversalDisbursalExecutionResult> {
     const timestamp = new Date().toISOString();
 
-    // 1. Resolve & validate beneficiary bank details
+    // 1. Resolve & validate beneficiary bank / card details
     let bank: BeneficiaryBankDetails | undefined = intent.beneficiaryBank;
     const vendor = await VendorMasterRepo.getVendorById(intent.vendorId);
 
@@ -62,6 +75,10 @@ export class FiatPayoutRail {
             routingOrSwift: storedBank.routing_swift,
             bankCountry: storedBank.bank_country,
             bankName: storedBank.bank_name,
+            paymentSubMethod: (storedBank.payment_sub_method as FiatSubMethodType) || "FEDWIRE",
+            cardLast4: storedBank.card_last4 || undefined,
+            cardToken: storedBank.card_token || undefined,
+            cardNetwork: storedBank.card_network || undefined,
           };
         }
       } catch {
@@ -71,28 +88,59 @@ export class FiatPayoutRail {
 
     if (!bank && vendor) {
       const vMetadata = (vendor as any).metadata || (vendor as any).bank_details;
-      if (vMetadata?.ibanOrAccountNumber || vMetadata?.accountNumber) {
+      if (vMetadata?.ibanOrAccountNumber || vMetadata?.accountNumber || vMetadata?.cardToken) {
         bank = {
           accountHolderName: vMetadata.accountHolderName || vendor.name,
-          ibanOrAccountNumber: vMetadata.ibanOrAccountNumber || vMetadata.accountNumber,
-          routingOrSwift: vMetadata.routingOrSwift || vMetadata.routingNumber || vMetadata.swiftCode,
+          ibanOrAccountNumber: vMetadata.ibanOrAccountNumber || vMetadata.accountNumber || vMetadata.cardToken,
+          routingOrSwift: vMetadata.routingOrSwift || vMetadata.routingNumber || vMetadata.swiftCode || "CARD_OCT",
           bankCountry: vMetadata.bankCountry || "US",
           bankName: vMetadata.bankName,
+          paymentSubMethod: vMetadata.paymentSubMethod || "FEDWIRE",
+          cardToken: vMetadata.cardToken,
+          cardLast4: vMetadata.cardLast4,
+          cardNetwork: vMetadata.cardNetwork,
         };
       }
     }
 
-    if (!bank || !bank.accountHolderName || !bank.ibanOrAccountNumber || !bank.routingOrSwift) {
-      return {
-        intentId: intent.intentId,
-        rail: "FIAT_PAYOUT",
-        success: false,
-        status: "REJECTED_BY_POLICY",
-        totalAmountUsdc: intent.amountUsdc,
-        allocations,
-        executionTimestamp: timestamp,
-        error: `Beneficiary bank credentials incomplete for vendor '${intent.vendorName}' (${intent.vendorId}). Required: accountHolderName, ibanOrAccountNumber, routingOrSwift.`,
-      };
+    // Determine sub-method
+    const subMethod: FiatSubMethodType =
+      (bank?.paymentSubMethod as FiatSubMethodType) ||
+      (bank?.cardToken ? "PUSH_TO_CARD" : this.defaultSubMethod);
+
+    // Validate details according to sub-method
+    if (subMethod === "PUSH_TO_CARD") {
+      const hasCardIdentifier = bank?.cardToken || (bank?.ibanOrAccountNumber && bank.ibanOrAccountNumber.length >= 15);
+      if (!bank || !bank.accountHolderName || !hasCardIdentifier) {
+        return {
+          intentId: intent.intentId,
+          rail: "FIAT_PAYOUT",
+          subMethod,
+          success: false,
+          status: "REJECTED_BY_POLICY",
+          totalAmountUsdc: intent.amountUsdc,
+          allocations,
+          executionTimestamp: timestamp,
+          error: `Beneficiary card credentials incomplete for Push-to-Card payout to '${intent.vendorName}' (${intent.vendorId}). Required: accountHolderName, cardToken or 16-digit debit card number.`,
+        };
+      }
+      if (!bank.routingOrSwift) {
+        bank.routingOrSwift = "CARD_OCT";
+      }
+    } else {
+      if (!bank || !bank.accountHolderName || !bank.ibanOrAccountNumber || !bank.routingOrSwift) {
+        return {
+          intentId: intent.intentId,
+          rail: "FIAT_PAYOUT",
+          subMethod,
+          success: false,
+          status: "REJECTED_BY_POLICY",
+          totalAmountUsdc: intent.amountUsdc,
+          allocations,
+          executionTimestamp: timestamp,
+          error: `Beneficiary bank credentials incomplete for vendor '${intent.vendorName}' (${intent.vendorId}). Required: accountHolderName, ibanOrAccountNumber, routingOrSwift.`,
+        };
+      }
     }
 
     // Persist verified bank details to prevent payee substitution
@@ -106,6 +154,10 @@ export class FiatPayoutRail {
         bank_name: bank.bankName,
         bank_country: bank.bankCountry,
         is_verified: true,
+        payment_sub_method: subMethod,
+        card_last4: bank.cardLast4 || (bank.ibanOrAccountNumber.length === 16 ? bank.ibanOrAccountNumber.slice(-4) : null),
+        card_token: bank.cardToken || null,
+        card_network: bank.cardNetwork || null,
       });
       bankAccountId = savedBank.bank_account_id;
     } catch {
@@ -115,16 +167,17 @@ export class FiatPayoutRail {
     // 2. Enforce Human Gate Threshold (SPRS escalation if > threshold and unsigned)
     const requiresHumanSignature = intent.amountUsdc > this.humanGateThresholdUsdc;
     if (requiresHumanSignature && !adminSignature) {
-      const sprsId = `SPRS_FIAT_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const sprsId = `SPRS_FIAT_${subMethod}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       try {
         await PermissionRequestRepo.createRequest({
           request_id: sprsId,
-          action_type: "FIAT_PAYOUT_DISBURSAL",
+          action_type: `FIAT_PAYOUT_${subMethod}`,
           amount_usdc: intent.amountUsdc,
-          reason: `Fiat payout to ${intent.vendorName} exceeds threshold ($${this.humanGateThresholdUsdc.toFixed(2)} USDC)`,
+          reason: `Fiat ${subMethod} payout to ${intent.vendorName} exceeds threshold ($${this.humanGateThresholdUsdc.toFixed(2)} USDC)`,
           status: "PENDING",
           payload: {
             vendorId: intent.vendorId,
+            subMethod,
             beneficiaryBank: bank,
             allocations,
           },
@@ -136,13 +189,14 @@ export class FiatPayoutRail {
       return {
         intentId: intent.intentId,
         rail: "FIAT_PAYOUT",
+        subMethod,
         success: false,
         status: "ESCALATE_TO_SPRS",
         totalAmountUsdc: intent.amountUsdc,
         allocations,
         sprsRequestId: sprsId,
         executionTimestamp: timestamp,
-        error: `Fiat payout of $${intent.amountUsdc.toFixed(2)} USDC exceeds single-transaction human gate limit of $${this.humanGateThresholdUsdc.toFixed(2)} USDC. Requires CFO EIP-712 approval.`,
+        error: `Fiat ${subMethod} payout of $${intent.amountUsdc.toFixed(2)} USDC exceeds single-transaction human gate limit of $${this.humanGateThresholdUsdc.toFixed(2)} USDC. Requires CFO EIP-712 approval.`,
       };
     }
 
@@ -151,10 +205,32 @@ export class FiatPayoutRail {
     const payoutId = `payout_${crypto.createHash("sha256").update(payoutRawPayload).digest("hex").slice(0, 20)}`;
     const usdcBurnTxHash = `0x${crypto.createHash("sha256").update(`ARC_BURN_${payoutId}`).digest("hex")}` as `0x${string}`;
     const idempotencyKey = `0x${crypto.createHash("sha256").update(`FIAT_IDEMP_${intent.intentId}_${intent.vendorId}`).digest("hex")}` as `0x${string}`;
-    const circlePayoutRef = `CIR-MINT-${payoutId.slice(7, 15).toUpperCase()}`;
 
-    // Estimated arrival: 1 business day for Fedwire / ACH
-    const arrivalDate = new Date(Date.now() + 24 * 3600 * 1000);
+    let circlePayoutRef: string;
+    let cardPayoutRef: string | undefined;
+    let imadOmadTrace: string | undefined;
+    let arrivalDate: Date;
+
+    if (subMethod === "PUSH_TO_CARD") {
+      cardPayoutRef = `CIR-CARD-${payoutId.slice(7, 15).toUpperCase()}`;
+      circlePayoutRef = cardPayoutRef;
+      // Real-time payout: arrives within 5 minutes
+      arrivalDate = new Date(Date.now() + 5 * 60 * 1000);
+    } else if (subMethod === "SEPA") {
+      circlePayoutRef = `CIR-SEPA-${payoutId.slice(7, 15).toUpperCase()}`;
+      // SEPA Instant: arrives within 30 seconds
+      arrivalDate = new Date(Date.now() + 30 * 1000);
+    } else if (subMethod === "ACH") {
+      circlePayoutRef = `CIR-ACH-${payoutId.slice(7, 15).toUpperCase()}`;
+      // Standard ACH: 1-2 business days
+      arrivalDate = new Date(Date.now() + 24 * 3600 * 1000);
+    } else {
+      // FEDWIRE / SWIFT
+      circlePayoutRef = `CIR-WIRE-${payoutId.slice(7, 15).toUpperCase()}`;
+      imadOmadTrace = `IMAD${Date.now().toString().slice(-8)}`;
+      // Same-day Fedwire: 2 hours
+      arrivalDate = new Date(Date.now() + 2 * 3600 * 1000);
+    }
 
     // 4. Persist to FiatPayoutRepo
     try {
@@ -172,6 +248,9 @@ export class FiatPayoutRail {
         sprs_request_id: intent.sprsRequestId || null,
         invoice_ref: intent.invoiceId || null,
         estimated_arrival: arrivalDate,
+        sub_method: subMethod,
+        card_payout_ref: cardPayoutRef || null,
+        imad_omad_trace: imadOmadTrace || null,
       });
     } catch {
       // Non-fatal if DB not running
@@ -180,6 +259,7 @@ export class FiatPayoutRail {
     return {
       intentId: intent.intentId,
       rail: "FIAT_PAYOUT",
+      subMethod,
       success: true,
       status: "EXECUTED",
       totalAmountUsdc: intent.amountUsdc,
@@ -187,6 +267,8 @@ export class FiatPayoutRail {
       txHash: usdcBurnTxHash,
       idempotencyKey,
       fiatPayoutId: payoutId,
+      cardPayoutRef,
+      imadOmadTrace,
       estimatedArrivalTimestamp: arrivalDate.toISOString(),
       executionTimestamp: timestamp,
     };

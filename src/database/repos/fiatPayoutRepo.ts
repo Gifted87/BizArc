@@ -13,6 +13,9 @@ export interface FiatPayoutRecord {
   sprs_request_id?: string | null;
   invoice_ref?: string | null;
   estimated_arrival?: Date | null;
+  sub_method?: "FEDWIRE" | "ACH" | "PUSH_TO_CARD" | "SEPA" | "SWIFT" | string;
+  card_payout_ref?: string | null;
+  imad_omad_trace?: string | null;
   created_at: Date;
   settled_at?: Date | null;
 }
@@ -31,14 +34,18 @@ export class FiatPayoutRepo {
     sprs_request_id?: string | null;
     invoice_ref?: string | null;
     estimated_arrival?: Date | null;
+    sub_method?: string;
+    card_payout_ref?: string | null;
+    imad_omad_trace?: string | null;
   }): Promise<FiatPayoutRecord> {
     const query = `
       INSERT INTO fiat_payout_records (
         payout_id, account_id, vendor_id, amount_usdc, fee_usdc,
         status, beneficiary_bank_id, circle_payout_ref, burn_tx_hash,
-        sprs_request_id, invoice_ref, estimated_arrival
+        sprs_request_id, invoice_ref, estimated_arrival,
+        sub_method, card_payout_ref, imad_omad_trace
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING *;
     `;
 
@@ -55,6 +62,9 @@ export class FiatPayoutRepo {
       params.sprs_request_id || null,
       params.invoice_ref || null,
       params.estimated_arrival || null,
+      params.sub_method || "FEDWIRE",
+      params.card_payout_ref || null,
+      params.imad_omad_trace || null,
     ];
 
     const res = await DbClient.query(query, values);

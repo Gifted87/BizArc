@@ -15,6 +15,9 @@ import http, { IncomingMessage, ServerResponse } from "node:http";
 import { TreasuryStateMachineOrchestrator } from "../orchestration/treasuryStateMachineOrchestrator.js";
 import { TokenSwapService } from "../services/tokenSwapService.js";
 import { FiatFundingService } from "../services/fiatFundingService.js";
+import { LiabilitySettingsService } from "../services/liabilitySettingsService.js";
+import { ManualDisbursalService } from "../services/manualDisbursalService.js";
+import { AccountFundingService } from "../services/accountFundingService.js";
 import { UniversalPaymentRouter } from "../payments/universalPaymentRouter.js";
 import { FiatPayoutRepo } from "../database/repos/fiatPayoutRepo.js";
 
@@ -25,6 +28,9 @@ export class SystemHttpServer {
   private orchestrator: TreasuryStateMachineOrchestrator;
   private swapService: TokenSwapService;
   private fiatFundingService: FiatFundingService;
+  private liabilitySettingsService: LiabilitySettingsService;
+  private manualDisbursalService: ManualDisbursalService;
+  private accountFundingService: AccountFundingService;
   private port: number;
   private isListening = false;
 
@@ -32,6 +38,9 @@ export class SystemHttpServer {
     this.orchestrator = orchestrator ?? new TreasuryStateMachineOrchestrator();
     this.swapService = new TokenSwapService();
     this.fiatFundingService = new FiatFundingService();
+    this.liabilitySettingsService = new LiabilitySettingsService();
+    this.manualDisbursalService = new ManualDisbursalService();
+    this.accountFundingService = new AccountFundingService();
     this.port = port;
   }
 
@@ -393,6 +402,106 @@ export class SystemHttpServer {
       }
 
       return this.sendJson(req, res, 200, { success: true, received: true });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // LIABILITY & VENDOR PAYMENT METHOD CONFIGURATION (Crypto Rails 1-4 & Fiat Sub-Methods)
+    // ─────────────────────────────────────────────────────────────────────────────
+    if (pathname.startsWith("/api/liabilities/") && pathname.endsWith("/payment-method")) {
+      const parts = pathname.split("/");
+      const liabilityId = parts[3];
+      if (method === "POST") {
+        const body = await this.parseBody(req);
+        try {
+          const result = await this.liabilitySettingsService.configurePaymentMethod({
+            companyId: body.companyId || "default_org",
+            vendorId: body.vendorId,
+            liabilityId,
+            preferredRail: body.preferredRail,
+            preferredSubMethod: body.preferredSubMethod,
+            cryptoDetails: body.cryptoDetails,
+            fiatDetails: body.fiatDetails,
+            disbursalRules: body.disbursalRules,
+          });
+          return this.sendJson(req, res, 200, { success: true, data: result });
+        } catch (err: any) {
+          return this.sendJson(req, res, 400, { success: false, error: err.message });
+        }
+      } else if (method === "GET") {
+        const companyId = url.searchParams.get("companyId") || "default_org";
+        const vendorId = url.searchParams.get("vendorId") || liabilityId;
+        try {
+          const result = await this.liabilitySettingsService.getPaymentMethod({
+            companyId,
+            vendorId,
+            liabilityId,
+          });
+          return this.sendJson(req, res, 200, { success: true, data: result });
+        } catch (err: any) {
+          return this.sendJson(req, res, 400, { success: false, error: err.message });
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // MANUAL DISBURSAL ENDPOINT (User-Initiated Payments via Fiat or Crypto)
+    // ─────────────────────────────────────────────────────────────────────────────
+    if (pathname === "/api/disbursals/manual" && method === "POST") {
+      const body = await this.parseBody(req);
+      try {
+        const result = await this.manualDisbursalService.executeManualDisbursal({
+          companyId: body.companyId || "default_org",
+          sourceAccountId: body.sourceAccountId || body.accountId,
+          vendorId: body.vendorId,
+          vendorName: body.vendorName || body.vendorId,
+          amountUsdc: Number(body.amountUsdc),
+          paymentRail: body.paymentRail,
+          fiatDetails: body.fiatDetails,
+          cryptoDetails: body.cryptoDetails,
+          declaredReason: body.declaredReason || "Manual payment initiated by user",
+          invoiceId: body.invoiceId,
+          poReference: body.poReference,
+          category: body.category,
+          adminSignature: body.adminSignature,
+          clearanceCode: body.clearanceCode,
+        });
+        return this.sendJson(req, res, result.success ? 200 : 400, result);
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // UNIFIED ACCOUNT FUNDING ENDPOINTS (Operating, Payroll, Tax, Yield Vault)
+    // ─────────────────────────────────────────────────────────────────────────────
+    if (pathname.startsWith("/api/accounts/") && pathname.endsWith("/funding-options") && method === "GET") {
+      const parts = pathname.split("/");
+      const accountId = parts[3];
+      try {
+        const result = await this.accountFundingService.getFundingOptions(accountId);
+        return this.sendJson(req, res, 200, { success: true, data: result });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname.startsWith("/api/accounts/") && pathname.endsWith("/fund") && method === "POST") {
+      const parts = pathname.split("/");
+      const accountId = parts[3];
+      const body = await this.parseBody(req);
+      try {
+        const result = await this.accountFundingService.initiateFundingSession({
+          accountId,
+          method: body.method,
+          amountUsdc: Number(body.amountUsdc),
+          userEmail: body.userEmail,
+          sourceChain: body.sourceChain,
+          sourceToken: body.sourceToken,
+        });
+        return this.sendJson(req, res, 200, { success: true, data: result });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
     }
 
     return this.sendJson(req, res, 404, { error: "NOT_FOUND", pathname });

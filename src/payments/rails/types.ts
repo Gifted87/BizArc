@@ -5,6 +5,13 @@ export type PaymentRailType =
   | "GATEWAY_X402"
   | "FIAT_PAYOUT";
 
+export type FiatSubMethodType =
+  | "FEDWIRE"
+  | "ACH"
+  | "PUSH_TO_CARD"
+  | "SEPA"
+  | "SWIFT";
+
 export interface UniversalDisbursalIntent {
   intentId: string;
   primaryAccountId: string;
@@ -22,6 +29,10 @@ export interface UniversalDisbursalIntent {
     routingOrSwift: string;
     bankCountry: string;
     bankName?: string;
+    paymentSubMethod?: FiatSubMethodType | string;
+    cardToken?: string;
+    cardLast4?: string;
+    cardNetwork?: string;
   };
   declaredReason: string;
   invoiceId?: string;
@@ -37,6 +48,7 @@ export interface UniversalDisbursalIntent {
 export interface UniversalDisbursalExecutionResult {
   intentId: string;
   rail: PaymentRailType;
+  subMethod?: string;
   success: boolean;
   status: "EXECUTED" | "AWAITING_SETTLEMENT" | "ESCALATE_TO_SPRS" | "REJECTED_BY_POLICY";
   totalAmountUsdc: number;
@@ -51,6 +63,8 @@ export interface UniversalDisbursalExecutionResult {
   authorizationNonce?: string;
   gatewaySettlementRef?: string;
   fiatPayoutId?: string;
+  cardPayoutRef?: string;
+  imadOmadTrace?: string;
   estimatedArrivalTimestamp?: string;
   sprsRequestId?: string;
   journalSequenceId?: string;

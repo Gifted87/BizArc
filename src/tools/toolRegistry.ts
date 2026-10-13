@@ -31,6 +31,9 @@ import { ProductionReadinessService } from "../services/productionReadinessServi
 import { LiabilityRepo } from "../database/repos/liabilityRepo.js";
 import { TokenSwapService } from "../services/tokenSwapService.js";
 import { FiatFundingService } from "../services/fiatFundingService.js";
+import { LiabilitySettingsService } from "../services/liabilitySettingsService.js";
+import { ManualDisbursalService } from "../services/manualDisbursalService.js";
+import { AccountFundingService } from "../services/accountFundingService.js";
 
 export interface ToolExecutionResult {
   success: boolean;
@@ -54,6 +57,9 @@ export class ToolRegistry {
   private productionReadiness: ProductionReadinessService;
   private tokenSwapService: TokenSwapService;
   private fiatFundingService: FiatFundingService;
+  private liabilitySettingsService: LiabilitySettingsService;
+  private manualDisbursalService: ManualDisbursalService;
+  private accountFundingService: AccountFundingService;
   private executedIdempotencyKeys: Set<string> = new Set();
   private executor?: ArcTransactionExecutor;
 
@@ -100,6 +106,9 @@ export class ToolRegistry {
       });
     this.tokenSwapService = new TokenSwapService();
     this.fiatFundingService = new FiatFundingService(this.dynamicRecords);
+    this.liabilitySettingsService = new LiabilitySettingsService();
+    this.manualDisbursalService = new ManualDisbursalService({ dynamicRecords: this.dynamicRecords, tokenSwapService: this.tokenSwapService });
+    this.accountFundingService = new AccountFundingService({ dynamicRecords: this.dynamicRecords, tokenSwapService: this.tokenSwapService });
   }
 
   public setComplianceAgent(complianceAgent: PolicyComplianceLlmAgent): void {
@@ -892,6 +901,177 @@ export class ToolRegistry {
               senderName: { type: "string", description: "Originating corporate entity name" },
             },
             required: ["accountId", "amountUsdc", "depositReference"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "configure_liability_payment_method",
+          description: "Configure or update payment pathway settings for a liability or vendor during onboarding, setup, or editing. Supports Crypto Rails (DISBURSAL_VAULT, ERC3009_AUTHORIZATION, MODULAR_SESSION_KEY, GATEWAY_X402) and Fiat Rails (FEDWIRE, ACH, PUSH_TO_CARD, SEPA, SWIFT).",
+          parameters: {
+            type: "object",
+            properties: {
+              companyId: { type: "string", description: "Company identifier" },
+              vendorId: { type: "string", description: "Vendor identifier" },
+              liabilityId: { type: "string", description: "Optional specific liability identifier" },
+              preferredRail: {
+                type: "string",
+                enum: ["DISBURSAL_VAULT", "MODULAR_SESSION_KEY", "ERC3009_AUTHORIZATION", "GATEWAY_X402", "FIAT_PAYOUT"],
+                description: "Primary payment rail",
+              },
+              preferredSubMethod: {
+                type: "string",
+                enum: ["FEDWIRE", "ACH", "PUSH_TO_CARD", "SEPA", "SWIFT"],
+                description: "Sub-method for FIAT_PAYOUT",
+              },
+              cryptoDetails: {
+                type: "object",
+                properties: {
+                  walletAddress: { type: "string" },
+                  chainId: { type: "number" },
+                  tokenSymbol: { type: "string" },
+                  sessionKeyId: { type: "string" },
+                  serviceEndpointUrl: { type: "string" },
+                },
+              },
+              fiatDetails: {
+                type: "object",
+                properties: {
+                  accountHolderName: { type: "string" },
+                  ibanOrAccountNumber: { type: "string" },
+                  routingOrSwift: { type: "string" },
+                  bankName: { type: "string" },
+                  bankCountry: { type: "string" },
+                  cardToken: { type: "string" },
+                  cardLast4: { type: "string" },
+                  cardNetwork: { type: "string" },
+                },
+              },
+              disbursalRules: {
+                type: "object",
+                properties: {
+                  autoPayThresholdUsdc: { type: "number" },
+                  requireThreeWayMatch: { type: "boolean" },
+                  preFlightLeadTimeHours: { type: "number" },
+                },
+              },
+            },
+            required: ["companyId", "vendorId", "preferredRail"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "get_liability_payment_method",
+          description: "Retrieve configured payment preferences and credentials for a liability or vendor.",
+          parameters: {
+            type: "object",
+            properties: {
+              companyId: { type: "string", description: "Company identifier" },
+              vendorId: { type: "string", description: "Vendor identifier" },
+              liabilityId: { type: "string", description: "Optional specific liability identifier" },
+            },
+            required: ["companyId", "vendorId"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "execute_manual_disbursal",
+          description: "Execute a manual user payment from any treasury account. Accepts either fiat details (ACH, Fedwire, Push-to-Card, SEPA) or crypto details (address, chain, token with auto-swap). Enforces policy thresholds, EIP-712 signatures, anti-payee substitution, and journal accounting.",
+          parameters: {
+            type: "object",
+            properties: {
+              companyId: { type: "string", description: "Company identifier" },
+              sourceAccountId: { type: "string", description: "Source treasury account (e.g. Operating, Payroll, Tax)" },
+              vendorId: { type: "string", description: "Vendor identifier" },
+              vendorName: { type: "string", description: "Vendor legal or trading name" },
+              amountUsdc: { type: "number", description: "Payment amount in USDC/USD" },
+              paymentRail: {
+                type: "string",
+                enum: ["DISBURSAL_VAULT", "MODULAR_SESSION_KEY", "ERC3009_AUTHORIZATION", "GATEWAY_X402", "FIAT_PAYOUT"],
+              },
+              fiatDetails: {
+                type: "object",
+                properties: {
+                  subMethod: { type: "string", enum: ["FEDWIRE", "ACH", "PUSH_TO_CARD", "SEPA", "SWIFT"] },
+                  accountHolderName: { type: "string" },
+                  ibanOrAccountNumber: { type: "string" },
+                  routingOrSwift: { type: "string" },
+                  bankCountry: { type: "string" },
+                  bankName: { type: "string" },
+                  cardToken: { type: "string" },
+                  cardLast4: { type: "string" },
+                  cardNetwork: { type: "string" },
+                },
+              },
+              cryptoDetails: {
+                type: "object",
+                properties: {
+                  walletAddress: { type: "string" },
+                  chainId: { type: "number" },
+                  tokenSymbol: { type: "string" },
+                  targetChain: { type: "string" },
+                  sessionKeyId: { type: "string" },
+                  serviceUrl: { type: "string" },
+                },
+              },
+              declaredReason: { type: "string", description: "Payment business purpose" },
+              invoiceId: { type: "string" },
+              poReference: { type: "string" },
+              category: { type: "string" },
+              adminSignature: { type: "string", description: "CFO EIP-712 signature for amounts above gate threshold" },
+              clearanceCode: { type: "string", description: "Single-use enforcer compliance clearance code" },
+            },
+            required: ["companyId", "sourceAccountId", "vendorId", "vendorName", "amountUsdc", "declaredReason"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "get_account_funding_options",
+          description: "Get comprehensive fiat (Card, Fedwire, ACH, SEPA) and crypto (Arc L1, CCTP Bridge, Multi-Token Swap) funding options for ANY treasury account (Operating, Payroll, Tax, Yield Vault).",
+          parameters: {
+            type: "object",
+            properties: {
+              accountId: { type: "string", description: "Treasury account identifier to inspect funding options for" },
+            },
+            required: ["accountId"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "fund_treasury_account",
+          description: "Initiate funding for ANY treasury account via chosen method (Card Onramp, Fedwire memo, Cross-chain CCTP, etc.).",
+          parameters: {
+            type: "object",
+            properties: {
+              accountId: { type: "string", description: "Target treasury account to fund" },
+              method: {
+                type: "string",
+                enum: [
+                  "FIAT_CARD_ONRAMP",
+                  "FIAT_FEDWIRE",
+                  "FIAT_ACH",
+                  "FIAT_SEPA",
+                  "CRYPTO_ARC_NATIVE",
+                  "CRYPTO_CROSS_CHAIN_CCTP",
+                  "CRYPTO_TOKEN_SWAP",
+                ],
+                description: "Funding pathway",
+              },
+              amountUsdc: { type: "number", description: "Amount in USDC/USD" },
+              userEmail: { type: "string", description: "Admin email for card onramp" },
+              sourceChain: { type: "string", description: "Source chain if bridging" },
+              sourceToken: { type: "string", description: "Source token if converting" },
+            },
+            required: ["accountId", "method", "amountUsdc"],
           },
         },
       },
@@ -2117,6 +2297,82 @@ export class ToolRegistry {
             depositReference: args.depositReference,
             sourceBank: args.sourceBank,
             senderName: args.senderName,
+          });
+          return {
+            success: true,
+            data: res,
+          };
+        }
+
+        case "configure_liability_payment_method": {
+          const res = await this.liabilitySettingsService.configurePaymentMethod({
+            companyId: args.companyId,
+            vendorId: args.vendorId,
+            liabilityId: args.liabilityId,
+            preferredRail: args.preferredRail,
+            preferredSubMethod: args.preferredSubMethod,
+            cryptoDetails: args.cryptoDetails,
+            fiatDetails: args.fiatDetails,
+            disbursalRules: args.disbursalRules,
+          });
+          return {
+            success: res.success,
+            data: res,
+          };
+        }
+
+        case "get_liability_payment_method": {
+          const res = await this.liabilitySettingsService.getPaymentMethod({
+            companyId: args.companyId,
+            vendorId: args.vendorId,
+            liabilityId: args.liabilityId,
+          });
+          return {
+            success: true,
+            data: res,
+          };
+        }
+
+        case "execute_manual_disbursal": {
+          const res = await this.manualDisbursalService.executeManualDisbursal({
+            companyId: args.companyId,
+            sourceAccountId: args.sourceAccountId,
+            vendorId: args.vendorId,
+            vendorName: args.vendorName,
+            amountUsdc: typeof args.amountUsdc === "number" ? args.amountUsdc : parseFloat(args.amountUsdc),
+            paymentRail: args.paymentRail,
+            fiatDetails: args.fiatDetails,
+            cryptoDetails: args.cryptoDetails,
+            declaredReason: args.declaredReason,
+            invoiceId: args.invoiceId,
+            poReference: args.poReference,
+            category: args.category,
+            adminSignature: args.adminSignature,
+            clearanceCode: args.clearanceCode,
+          });
+          return {
+            success: res.success,
+            data: res,
+            error: res.error,
+          };
+        }
+
+        case "get_account_funding_options": {
+          const res = await this.accountFundingService.getFundingOptions(args.accountId);
+          return {
+            success: true,
+            data: res,
+          };
+        }
+
+        case "fund_treasury_account": {
+          const res = await this.accountFundingService.initiateFundingSession({
+            accountId: args.accountId,
+            method: args.method,
+            amountUsdc: typeof args.amountUsdc === "number" ? args.amountUsdc : parseFloat(args.amountUsdc),
+            userEmail: args.userEmail,
+            sourceChain: args.sourceChain,
+            sourceToken: args.sourceToken,
           });
           return {
             success: true,

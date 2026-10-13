@@ -104,6 +104,7 @@ export class DisbursalRouter {
       deliveryProofHash: deliveryProof,
       requireThreeWayMatch: requireThreeWay,
       sessionKeyId,
+      beneficiaryBank: railConfig.beneficiaryBank,
     };
 
     const execution = await this.paymentRouter.routeAndExecute({
