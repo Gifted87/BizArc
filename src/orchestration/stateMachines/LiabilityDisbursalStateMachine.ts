@@ -7,6 +7,7 @@
  */
 
 import { DisbursalRouterService, DisbursalRoutingRequest } from "../../services/disbursalRouterService.js";
+import { DisbursalRouter } from "../../services/disbursalRouter.js";
 import { DynamicRecordsService } from "../../records/dynamicRecordsService.js";
 import { PredictiveRefunderService } from "../../services/predictiveRefunderService.js";
 import { PolicyComplianceLlmAgent } from "../../agents/policyComplianceLlmAgent.js";
@@ -192,61 +193,46 @@ export class LiabilityDisbursalStateMachine {
         clearanceCode: complianceResult.clearanceCode,
       });
 
-      // 5. Staging in DisbursalVault
+      // 5. Staging & Execution via DisbursalRouter
       this.logTransition(instanceId, "CLEARANCE_GRANTED", "FUNDS_STAGED_IN_VAULT", "DISBURSAL_VAULT_STAGED");
 
-      let txHash = `0x${Date.now().toString(16)}`;
+      const universalRouter = new DisbursalRouter();
+      const disbursalExecution = await universalRouter.executeLiabilityDisbursal({
+        companyId: liability.company_id || "default_org",
+        liabilityId: liability.liability_id!,
+      });
 
-      // 6. Branching Execution: Check Payment Rail
-      const rail = liability.preferred_payment_rail || "DISBURSAL_VAULT";
-
-      if (rail === "FIAT_OFFRAMP" || rail === "FIAT_PAYOUT") {
-        // TERMINAL SETTLEMENT RAIL: Circle Mint / Fedwire / ACH
-        this.logTransition(instanceId, "FUNDS_STAGED_IN_VAULT", "FIAT_OFFRAMP_DISPATCHED", "FIAT_CONVERSION_INITIATED");
-
-        // Dynamically resolve verified bank details from DB or payment_rail_config
-        let bank: any = (liability.payment_rail_config as any)?.beneficiaryBank || liability.payment_rail_config;
-        if (!bank?.ibanOrAccountNumber) {
-          try {
-            const storedBank = await VendorBankRepo.getVerifiedBankAccount(liability.vendor_id);
-            if (storedBank) {
-              bank = {
-                accountHolderName: storedBank.account_holder_name,
-                ibanOrAccountNumber: storedBank.iban_account_number,
-                routingOrSwift: storedBank.routing_swift,
-                bankCountry: storedBank.bank_country,
-                bankName: storedBank.bank_name,
-              };
-            }
-          } catch {
-            // Ignore DB lookup error
-          }
-        }
-
-        if (!bank || !bank.ibanOrAccountNumber || !bank.routingOrSwift) {
-          throw new Error(`FIAT_PAYOUT_REJECTED: No verified beneficiary bank account found for vendor '${liability.vendor_id}'. Payee substitution guardrail triggered.`);
-        }
-
-        const fiatResult = await this.toolRegistry.executeTool("convert_crypto_to_fiat_payout", {
-          sourceAccountId: liability.account_id,
-          amountUsdc: amountUsdc.toFixed(6),
-          beneficiaryBank: {
-            accountHolderName: bank.accountHolderName || liability.vendor_id,
-            ibanOrAccountNumber: bank.ibanOrAccountNumber,
-            routingOrSwift: bank.routingOrSwift,
-            bankCountry: bank.bankCountry || "US",
-            bankName: bank.bankName,
-          },
-          invoiceReference: liability.source_invoice_hash || liability.title,
+      if (!disbursalExecution.success && disbursalExecution.status === "ESCALATE_TO_SPRS") {
+        this.logTransition(instanceId, "FUNDS_STAGED_IN_VAULT", "AWAITING_HUMAN_APPROVAL", "SPRS_ESCALATED", {
+          sprsRequestId: disbursalExecution.sprsRequestId,
         });
+        return {
+          success: false,
+          machineName: "LIABILITY_DISBURSAL_STATE_MACHINE",
+          instanceId,
+          currentState: "AWAITING_HUMAN_APPROVAL",
+          data: { sprsRequestId: disbursalExecution.sprsRequestId, liabilityId: liability.liability_id },
+          unbrokenChainLog: [...this.transitionLog],
+        };
+      }
 
-        if (!fiatResult.success) {
-          throw new Error(`FIAT_PAYOUT_FAILED: ${fiatResult.error}`);
-        }
-        txHash = fiatResult.data.usdcBurnTxHash;
+      if (!disbursalExecution.success) {
+        throw new Error(disbursalExecution.error || `Disbursal failed with status ${disbursalExecution.status}`);
+      }
+
+      const txHash = disbursalExecution.txHash || `0x${Date.now().toString(16)}`;
+      const activeRail = disbursalExecution.rail;
+
+      if (activeRail === "FIAT_PAYOUT") {
+        this.logTransition(instanceId, "FUNDS_STAGED_IN_VAULT", "FIAT_OFFRAMP_DISPATCHED", "FIAT_CONVERSION_INITIATED", {
+          txHash,
+          rail: activeRail,
+        });
       } else {
-        // Crypto settlement on Arc L1
-        this.logTransition(instanceId, "FUNDS_STAGED_IN_VAULT", "CRYPTO_PAYMENT_DISPATCHED", "ARC_L1_TRANSACTED");
+        this.logTransition(instanceId, "FUNDS_STAGED_IN_VAULT", "CRYPTO_PAYMENT_DISPATCHED", "ARC_L1_TRANSACTED", {
+          txHash,
+          rail: activeRail,
+        });
       }
 
       // 7. Ledger Witnessing: Record Journal Voucher and Audit Log
@@ -259,13 +245,10 @@ export class LiabilityDisbursalStateMachine {
         txHash,
       });
 
-      if (liability.liability_id) {
-        await LiabilityRepo.updateLiabilityStatus(liability.liability_id, "DISBURSED");
-      }
-
-      this.logTransition(instanceId, "CRYPTO_PAYMENT_DISPATCHED", "WITNESSED_AND_SETTLED", "PAYMENT_CONFIRMED", {
+      this.logTransition(instanceId, activeRail === "FIAT_PAYOUT" ? "FIAT_OFFRAMP_DISPATCHED" : "CRYPTO_PAYMENT_DISPATCHED", "WITNESSED_AND_SETTLED", "PAYMENT_CONFIRMED", {
         txHash,
-        rail,
+        rail: activeRail,
+        journalSequenceId: disbursalExecution.journalSequenceId,
       });
 
       // 8. Unbroken Chain Hand-off: Notify Machine 3 (Yield Engine) of balance drop
@@ -278,7 +261,12 @@ export class LiabilityDisbursalStateMachine {
         machineName: "LIABILITY_DISBURSAL_STATE_MACHINE",
         instanceId,
         currentState: "WITNESSED_AND_SETTLED",
-        data: { txHash, status: "PAID", rail },
+        data: {
+          txHash,
+          status: "PAID",
+          rail: activeRail,
+          journalSequenceId: disbursalExecution.journalSequenceId,
+        },
         unbrokenChainLog: [...this.transitionLog],
       };
     } catch (err: any) {

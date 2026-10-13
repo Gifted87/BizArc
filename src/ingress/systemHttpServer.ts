@@ -386,19 +386,34 @@ export class SystemHttpServer {
           await FiatPayoutRepo.confirmPayoutSettlement(payoutId);
         }
         return this.sendJson(req, res, 200, { success: true, event: eventType, status: "SETTLED" });
-      } else if (eventType === "transfer.complete" || eventType === "payments.paid") {
-        const trackingMemo = body.data?.trackingMemo || body.trackingMemo || body.data?.reference;
-        const amount = parseFloat(body.data?.amount?.amount || body.amountUsdc || "0");
-        const accountId = body.accountId || "acc_primary";
-        if (trackingMemo && amount > 0) {
+      } else if (eventType === "transfer.complete" || eventType === "payments.paid" || eventType === "deposits.complete") {
+        const trackingMemo = body.data?.trackingMemo || body.trackingMemo || body.data?.reference || `MINT_${Date.now()}`;
+        const amount = parseFloat(body.data?.amount?.amount || body.amountUsdc || body.amount || "0");
+        const accountId = body.accountId || body.data?.accountId || "acc_primary";
+        if (amount > 0) {
           await this.fiatFundingService.recordFiatDeposit({
             accountId,
             amountUsdc: amount,
             depositReference: trackingMemo,
-            sourceBank: "Circle Mint Fedwire Webhook",
+            sourceBank: "Circle Mint Webhook Ingress",
           });
+
+          await this.accountFundingService.reconcileDeposit({
+            accountId,
+            amountUsdc: amount,
+            depositReference: trackingMemo,
+            method: "FIAT_FEDWIRE",
+            sourceInstitution: "Circle Mint Webhook",
+          });
+
+          // Trigger Yield Engine to evaluate target reserves and auto-sweep surplus into USYC
+          try {
+            await this.orchestrator.yieldMachine.recalculateForAccount(accountId);
+          } catch {
+            // Non-fatal if accounts not initialized
+          }
         }
-        return this.sendJson(req, res, 200, { success: true, event: eventType, status: "DEPOSIT_RECONCILED" });
+        return this.sendJson(req, res, 200, { success: true, event: eventType, status: "DEPOSIT_RECONCILED", accountId, amountUsdc: amount });
       }
 
       return this.sendJson(req, res, 200, { success: true, received: true });

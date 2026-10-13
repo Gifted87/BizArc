@@ -11,11 +11,11 @@ export interface LiabilityDbRecord {
   amount_usdc: number;
   due_date: Date;
   frequency_cron?: string | null;
-  payout_address: `0x${string}`;
+  payout_address: `0x${string}` | string;
   source_po_hash?: string | null;
   source_invoice_hash?: string | null;
   status: LiabilityStatus;
-  preferred_payment_rail?: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402" | string;
+  preferred_payment_rail?: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402" | "FIAT_PAYOUT" | string;
   payment_rail_config?: Record<string, any>;
   disbursal_rules?: Record<string, any>;
   waterfall_override?: Record<string, any> | null;

@@ -1,5 +1,7 @@
 import { MovementPolicyRepo } from "../database/repos/movementPolicyRepo.js";
 import { VendorMasterRepo } from "../database/repos/vendorMasterRepo.js";
+import { VendorBankRepo } from "../database/repos/vendorBankRepo.js";
+import { VendorPaymentPreferenceRepo } from "../database/repos/vendorPaymentPreferenceRepo.js";
 import { MasterJournalRepo } from "../database/repos/masterJournalRepo.js";
 import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
 import { PermissionRequestRepo } from "../database/repos/permissionRequestRepo.js";
@@ -212,29 +214,75 @@ export class UniversalPaymentRouter {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // INVARIANT 3: VENDOR MASTER LOOKUP & PAYEE SUBSTITUTION DEFENSE (Rule 3)
+    // INVARIANT 3: VENDOR MASTER LOOKUP, PAYMENT PREFERENCES & PAYEE SUBSTITUTION DEFENSE (Rule 3)
     // ─────────────────────────────────────────────────────────────────────────────
+    const vendorPreference = await VendorPaymentPreferenceRepo.getPreference(intent.vendorId);
     let vendorRecord = await VendorMasterRepo.getVendorById(intent.vendorId);
-    if (!vendorRecord && (intent.payoutAddress || intent.serviceUrl)) {
+
+    // If intent has no beneficiaryBank but preference or rail indicates FIAT_PAYOUT, resolve bank
+    const isPreferredFiat = overrideRail === "FIAT_PAYOUT" || vendorPreference?.preferred_rail === "FIAT_PAYOUT";
+    if (!intent.beneficiaryBank && isPreferredFiat) {
+      try {
+        const bankRecord = vendorPreference?.bank_account_id
+          ? await VendorBankRepo.getBankAccountById(vendorPreference.bank_account_id)
+          : await VendorBankRepo.getVerifiedBankAccount(intent.vendorId);
+
+        if (bankRecord) {
+          intent.beneficiaryBank = {
+            accountHolderName: bankRecord.account_holder_name,
+            ibanOrAccountNumber: bankRecord.iban_account_number,
+            routingOrSwift: bankRecord.routing_swift,
+            bankCountry: bankRecord.bank_country,
+            bankName: bankRecord.bank_name,
+            paymentSubMethod: (bankRecord.payment_sub_method as any) || vendorPreference?.preferred_sub_method || "FEDWIRE",
+            cardLast4: bankRecord.card_last4 || undefined,
+            cardToken: bankRecord.card_token || undefined,
+            cardNetwork: bankRecord.card_network || undefined,
+          };
+        }
+      } catch {
+        // Fallback if lookup fails
+      }
+    }
+
+    if (!intent.sessionKeyId && vendorPreference?.session_key_id) {
+      intent.sessionKeyId = vendorPreference.session_key_id;
+    }
+    if (!intent.serviceUrl && vendorPreference?.service_endpoint_url) {
+      intent.serviceUrl = vendorPreference.service_endpoint_url;
+    }
+
+    // Determine target rail
+    const activeRail: PaymentRailType =
+      overrideRail ||
+      vendorPreference?.preferred_rail ||
+      (vendorRecord as any)?.payout_rail ||
+      (intent.beneficiaryBank ? "FIAT_PAYOUT" : intent.serviceUrl ? "GATEWAY_X402" : "DISBURSAL_VAULT");
+
+    if (!vendorRecord && (intent.payoutAddress || intent.serviceUrl || intent.beneficiaryBank)) {
       vendorRecord = await VendorMasterRepo.registerVendor({
         vendor_id: intent.vendorId,
         name: intent.vendorName,
-        verified_payout_address: (intent.payoutAddress || "0x0000000000000000000000000000000000000001") as `0x${string}`,
+        verified_payout_address: (intent.payoutAddress && intent.payoutAddress.startsWith("0x") && intent.payoutAddress.length === 42 ? intent.payoutAddress : "0x0000000000000000000000000000000000000001") as `0x${string}`,
         verified_by_admin: "UNIVERSAL_ROUTER_PRECHECK",
         last_verified_at: new Date(),
         change_lock: true,
       });
     }
 
-    // 3A. Verify EVM payout address
+    // 3A. Verify EVM payout address (only for crypto rails where payoutAddress is required)
     if (
+      activeRail !== "FIAT_PAYOUT" &&
       vendorRecord &&
       intent.payoutAddress &&
+      intent.payoutAddress.startsWith("0x") &&
+      vendorRecord.verified_payout_address &&
+      vendorRecord.verified_payout_address !== "0x0000000000000000000000000000000000000001" &&
       vendorRecord.verified_payout_address.toLowerCase() !== intent.payoutAddress.toLowerCase()
     ) {
       return {
         intentId: intent.intentId,
-        rail: overrideRail || "DISBURSAL_VAULT",
+        rail: activeRail,
         success: false,
         status: "REJECTED_BY_POLICY",
         totalAmountUsdc: intent.amountUsdc,
@@ -262,12 +310,6 @@ export class UniversalPaymentRouter {
         error: `PAYEE SUBSTITUTION DETECTED (Rule 3): Claimed endpoint ${intent.serviceUrl} does not match immutable Vendor Master endpoint ${(vendorRecord as any).payment_endpoint_url}!`,
       };
     }
-
-    // Determine target rail
-    const activeRail: PaymentRailType =
-      overrideRail ||
-      (vendorRecord as any)?.payout_rail ||
-      (intent.beneficiaryBank ? "FIAT_PAYOUT" : intent.serviceUrl ? "GATEWAY_X402" : "DISBURSAL_VAULT");
 
     // ─────────────────────────────────────────────────────────────────────────────
     // INVARIANT 4: THREE-WAY MATCH VERIFICATION (Rule 2 - Invoices on Rails 1, 2, 3, 5)

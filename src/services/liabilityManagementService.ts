@@ -2,6 +2,8 @@ import { keccak256, stringToHex } from "viem";
 import { LiabilityRepo, LiabilityDbRecord } from "../database/repos/liabilityRepo.js";
 import { TreasuryAccountsRepo } from "../database/repos/treasuryAccountsRepo.js";
 import { VendorMasterRepo } from "../database/repos/vendorMasterRepo.js";
+import { VendorBankRepo } from "../database/repos/vendorBankRepo.js";
+import { VendorPaymentPreferenceRepo, FiatSubMethodType } from "../database/repos/vendorPaymentPreferenceRepo.js";
 import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
 import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
 import { LiabilityCategory, LiabilityStatus } from "../types/accounts.js";
@@ -16,10 +18,29 @@ export interface CreateLiabilityParams {
   amountUsdc: number;
   dueDate: Date | string;
   frequencyCron?: string;
-  payoutAddress?: `0x${string}`;
+  payoutAddress?: `0x${string}` | string;
   serviceUrl?: string;
   poReference?: string;
   preferredPaymentRail?: PaymentRailType;
+  preferredSubMethod?: FiatSubMethodType | string;
+  fiatDetails?: {
+    accountHolderName: string;
+    ibanOrAccountNumber: string;
+    routingOrSwift?: string;
+    bankName?: string;
+    bankCountry?: string;
+    cardToken?: string;
+    cardLast4?: string;
+    cardNetwork?: string;
+    paymentSubMethod?: string;
+  };
+  cryptoDetails?: {
+    walletAddress?: `0x${string}` | string;
+    chainId?: number;
+    tokenSymbol?: string;
+    sessionKeyId?: string;
+    serviceEndpointUrl?: string;
+  };
   paymentRailConfig?: Record<string, any>;
   disbursalRules?: Record<string, any>;
   waterfallOverride?: Record<string, any>;
@@ -66,15 +87,60 @@ export class LiabilityManagementService implements ILiabilityManagementService {
       throw new Error(`LOUD_ROUNDING_ERROR (Rule 5): Amount '${params.amountUsdc}' exceeds 6-decimal USDC precision.`);
     }
 
-    // 3. Register Vendor in Vendor Master Registry
-    const payoutAddr = (params.payoutAddress || "0x0000000000000000000000000000000000000001") as `0x${string}`;
+    // 3. Process Multi-Modal Payment Preferences & Banking Details
+    let bankAccountId: string | undefined;
+    const isFiat = params.preferredPaymentRail === "FIAT_PAYOUT" || !!params.fiatDetails;
+    const effectiveRail = params.preferredPaymentRail || (isFiat ? "FIAT_PAYOUT" : (params.serviceUrl ? "GATEWAY_X402" : "DISBURSAL_VAULT"));
+
+    if (isFiat && params.fiatDetails) {
+      const subMethod = params.preferredSubMethod || params.fiatDetails.paymentSubMethod || (params.fiatDetails.cardToken ? "PUSH_TO_CARD" : "FEDWIRE");
+      const bankRecord = await VendorBankRepo.createBankAccount({
+        vendor_id: params.vendorId,
+        account_holder_name: params.fiatDetails.accountHolderName,
+        iban_account_number: params.fiatDetails.ibanOrAccountNumber,
+        routing_swift: params.fiatDetails.routingOrSwift || (subMethod === "PUSH_TO_CARD" ? "CARD_OCT" : "021000018"),
+        bank_name: params.fiatDetails.bankName,
+        bank_country: params.fiatDetails.bankCountry || "US",
+        payment_sub_method: subMethod,
+        card_token: params.fiatDetails.cardToken || null,
+        card_last4: params.fiatDetails.cardLast4 || (params.fiatDetails.ibanOrAccountNumber.length === 16 ? params.fiatDetails.ibanOrAccountNumber.slice(-4) : null),
+        card_network: params.fiatDetails.cardNetwork || null,
+        is_verified: true,
+        verified_by_admin: "LIABILITY_MANAGEMENT_SERVICE",
+      });
+      bankAccountId = bankRecord.bank_account_id;
+    }
+
+    let payoutAddr = params.payoutAddress || params.cryptoDetails?.walletAddress;
+    if (!payoutAddr || typeof payoutAddr !== "string" || !payoutAddr.startsWith("0x") || payoutAddr.length !== 42) {
+      payoutAddr = isFiat ? (bankAccountId || params.vendorId) : "0x0000000000000000000000000000000000000001";
+    }
+
+    // Register Vendor in Vendor Master Registry
     await VendorMasterRepo.registerVendor({
       vendor_id: params.vendorId,
       name: params.vendorName || params.vendorId,
-      verified_payout_address: payoutAddr,
+      verified_payout_address: payoutAddr.startsWith("0x") ? (payoutAddr as `0x${string}`) : ("0x0000000000000000000000000000000000000001" as `0x${string}`),
       verified_by_admin: "LIABILITY_MANAGEMENT_SERVICE",
       last_verified_at: new Date(),
       change_lock: true,
+    });
+
+    // Persist to VendorPaymentPreferenceRepo
+    await VendorPaymentPreferenceRepo.setPreference({
+      vendor_id: params.vendorId,
+      preferred_rail: effectiveRail,
+      preferred_sub_method: params.preferredSubMethod || null,
+      crypto_wallet_address: params.cryptoDetails?.walletAddress || (payoutAddr.startsWith("0x") ? payoutAddr : null),
+      crypto_chain_id: params.cryptoDetails?.chainId ?? 5042,
+      crypto_token_symbol: params.cryptoDetails?.tokenSymbol || "USDC",
+      bank_account_id: bankAccountId || null,
+      service_endpoint_url: params.serviceUrl || params.cryptoDetails?.serviceEndpointUrl || null,
+      session_key_id: params.cryptoDetails?.sessionKeyId || null,
+      configuration_payload: {
+        disbursalRules: params.disbursalRules,
+        fiatDetails: params.fiatDetails,
+      },
     });
 
     // 4. Compute Document Hashes
@@ -84,6 +150,15 @@ export class LiabilityManagementService implements ILiabilityManagementService {
     const invHash = keccak256(stringToHex(`INV:${params.title}:${params.amountUsdc}:${Date.now()}`));
 
     const dueDateObj = typeof params.dueDate === "string" ? new Date(params.dueDate) : params.dueDate;
+
+    const mergedRailConfig = {
+      ...(params.paymentRailConfig || {}),
+      subMethod: params.preferredSubMethod,
+      bankAccountId,
+      serviceUrl: params.serviceUrl || params.cryptoDetails?.serviceEndpointUrl,
+      sessionKeyId: params.cryptoDetails?.sessionKeyId,
+      beneficiaryBank: params.fiatDetails,
+    };
 
     const liabilityRecord: LiabilityDbRecord = {
       company_id: companyId,
@@ -98,8 +173,8 @@ export class LiabilityManagementService implements ILiabilityManagementService {
       source_po_hash: poHash,
       source_invoice_hash: invHash,
       status: "SCHEDULED",
-      preferred_payment_rail: params.preferredPaymentRail || (params.serviceUrl ? "GATEWAY_X402" : "DISBURSAL_VAULT"),
-      payment_rail_config: params.paymentRailConfig || {},
+      preferred_payment_rail: effectiveRail,
+      payment_rail_config: mergedRailConfig,
       disbursal_rules: params.disbursalRules || {
         autoPayThresholdUsdc: 500,
         requireThreeWayMatch: true,
@@ -160,6 +235,57 @@ export class LiabilityManagementService implements ILiabilityManagementService {
       }
     }
 
+    // Process Bank & Payment Preference updates if provided
+    let updatedBankAccountId: string | undefined = existing.payment_rail_config?.bankAccountId;
+    const vendorId = params.vendorId || existing.vendor_id;
+
+    if (params.fiatDetails) {
+      const subMethod = params.preferredSubMethod || params.fiatDetails.paymentSubMethod || (params.fiatDetails.cardToken ? "PUSH_TO_CARD" : "FEDWIRE");
+      const bankRecord = await VendorBankRepo.createBankAccount({
+        vendor_id: vendorId,
+        account_holder_name: params.fiatDetails.accountHolderName,
+        iban_account_number: params.fiatDetails.ibanOrAccountNumber,
+        routing_swift: params.fiatDetails.routingOrSwift || (subMethod === "PUSH_TO_CARD" ? "CARD_OCT" : "021000018"),
+        bank_name: params.fiatDetails.bankName,
+        bank_country: params.fiatDetails.bankCountry || "US",
+        payment_sub_method: subMethod,
+        card_token: params.fiatDetails.cardToken || null,
+        card_last4: params.fiatDetails.cardLast4 || (params.fiatDetails.ibanOrAccountNumber.length === 16 ? params.fiatDetails.ibanOrAccountNumber.slice(-4) : null),
+        card_network: params.fiatDetails.cardNetwork || null,
+        is_verified: true,
+        verified_by_admin: "LIABILITY_MANAGEMENT_SERVICE",
+      });
+      updatedBankAccountId = bankRecord.bank_account_id;
+    }
+
+    if (params.preferredPaymentRail || params.preferredSubMethod || params.fiatDetails || params.cryptoDetails) {
+      await VendorPaymentPreferenceRepo.setPreference({
+        vendor_id: vendorId,
+        preferred_rail: (params.preferredPaymentRail || existing.preferred_payment_rail || "DISBURSAL_VAULT") as PaymentRailType,
+        preferred_sub_method: params.preferredSubMethod || existing.payment_rail_config?.subMethod || null,
+        crypto_wallet_address: params.cryptoDetails?.walletAddress || (params.payoutAddress?.startsWith("0x") ? params.payoutAddress : null),
+        crypto_chain_id: params.cryptoDetails?.chainId ?? 5042,
+        crypto_token_symbol: params.cryptoDetails?.tokenSymbol || "USDC",
+        bank_account_id: updatedBankAccountId || null,
+        service_endpoint_url: params.serviceUrl || params.cryptoDetails?.serviceEndpointUrl || null,
+        session_key_id: params.cryptoDetails?.sessionKeyId || null,
+        configuration_payload: {
+          disbursalRules: params.disbursalRules,
+          fiatDetails: params.fiatDetails,
+        },
+      });
+    }
+
+    const mergedRailConfig = {
+      ...(existing.payment_rail_config || {}),
+      ...(params.paymentRailConfig || {}),
+      subMethod: params.preferredSubMethod !== undefined ? params.preferredSubMethod : existing.payment_rail_config?.subMethod,
+      bankAccountId: updatedBankAccountId,
+      serviceUrl: params.serviceUrl || params.cryptoDetails?.serviceEndpointUrl || existing.payment_rail_config?.serviceUrl,
+      sessionKeyId: params.cryptoDetails?.sessionKeyId || existing.payment_rail_config?.sessionKeyId,
+      beneficiaryBank: params.fiatDetails || existing.payment_rail_config?.beneficiaryBank,
+    };
+
     const updates: Partial<LiabilityDbRecord> = {};
     if (params.accountId) updates.account_id = params.accountId;
     if (params.vendorId) updates.vendor_id = params.vendorId;
@@ -170,7 +296,7 @@ export class LiabilityManagementService implements ILiabilityManagementService {
     if (params.frequencyCron !== undefined) updates.frequency_cron = params.frequencyCron;
     if (params.payoutAddress) updates.payout_address = params.payoutAddress;
     if (params.preferredPaymentRail) updates.preferred_payment_rail = params.preferredPaymentRail;
-    if (params.paymentRailConfig) updates.payment_rail_config = params.paymentRailConfig;
+    updates.payment_rail_config = mergedRailConfig;
     if (params.disbursalRules) updates.disbursal_rules = params.disbursalRules;
     if (params.waterfallOverride !== undefined) updates.waterfall_override = params.waterfallOverride;
 

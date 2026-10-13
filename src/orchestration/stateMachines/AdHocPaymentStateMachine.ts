@@ -8,6 +8,7 @@
 import { DisbursalRouterService } from "../../services/disbursalRouterService.js";
 import { DynamicRecordsService } from "../../records/dynamicRecordsService.js";
 import { PredictiveRefunderService } from "../../services/predictiveRefunderService.js";
+import { ManualDisbursalService, ManualPaymentFiatDetails, ManualPaymentCryptoDetails } from "../../services/manualDisbursalService.js";
 import { PolicyComplianceLlmAgent } from "../../agents/policyComplianceLlmAgent.js";
 import { LedgerWitnessLlmAgent } from "../../agents/ledgerWitnessLlmAgent.js";
 import { TreasuryAccountsRepo } from "../../database/repos/treasuryAccountsRepo.js";
@@ -16,6 +17,7 @@ import { VendorBankRepo } from "../../database/repos/vendorBankRepo.js";
 import { StandardizedPermissionRequest } from "../../types/sprs.js";
 import { ToolRegistry } from "../../tools/toolRegistry.js";
 import { StateMachineExecutionResult, StateMachineTransitionRecord } from "./types.js";
+import { PaymentRailType } from "../../payments/rails/types.js";
 
 export type AdHocPaymentState =
   | "REQUEST_RECEIVED"
@@ -32,17 +34,16 @@ export type AdHocPaymentState =
 export interface AdHocPaymentRequest {
   companyId: string;
   recipientAddress?: string;
-  beneficiaryBank?: {
-    accountHolderName: string;
-    ibanOrAccountNumber: string;
-    routingOrSwift: string;
-    bankCountry: string;
-  };
+  beneficiaryBank?: ManualPaymentFiatDetails;
+  cryptoDetails?: ManualPaymentCryptoDetails;
   amountUsdc: number;
   reason: string;
   category?: string;
   requestedAccountId?: string;
-  paymentRail?: "DISBURSAL_VAULT" | "FIAT_OFFRAMP" | "FIAT_PAYOUT" | "ERC3009_AUTHORIZATION";
+  paymentRail?: PaymentRailType | "FIAT_OFFRAMP" | "MODULAR_SESSION_KEYS";
+  adminSignature?: `0x${string}`;
+  clearanceCode?: string;
+  sprsRequestId?: string;
 }
 
 export class AdHocPaymentStateMachine {
@@ -179,35 +180,59 @@ export class AdHocPaymentStateMachine {
         });
       }
 
-      // 4. Staging & Execution
+      // 4. Staging & Execution via Unified ManualDisbursalService
       this.logTransition(instanceId, "ACCOUNT_QUALIFIED", "STAGED_IN_DISBURSAL_VAULT", "VAULT_STAGING");
 
-      let txHash = `0x${Date.now().toString(16)}`;
-      const rail = req.paymentRail || (req.beneficiaryBank ? "FIAT_PAYOUT" : "DISBURSAL_VAULT");
+      const manualDisbursalService = new ManualDisbursalService();
+      const rawRail = req.paymentRail || (req.beneficiaryBank ? "FIAT_PAYOUT" : "DISBURSAL_VAULT");
+      const normalizedRail: PaymentRailType = rawRail === "FIAT_OFFRAMP"
+        ? "FIAT_PAYOUT"
+        : rawRail === "MODULAR_SESSION_KEYS"
+        ? "MODULAR_SESSION_KEY"
+        : (rawRail as PaymentRailType);
 
-      if ((rail === "FIAT_OFFRAMP" || rail === "FIAT_PAYOUT") && req.beneficiaryBank) {
-        try {
-          await VendorBankRepo.createBankAccount({
-            vendor_id: `ADHOC_${selectedAccount.account_id}`,
-            account_holder_name: req.beneficiaryBank.accountHolderName,
-            iban_account_number: req.beneficiaryBank.ibanOrAccountNumber,
-            routing_swift: req.beneficiaryBank.routingOrSwift,
-            bank_country: req.beneficiaryBank.bankCountry || "US",
-            is_verified: true,
-          });
-        } catch {
-          // Non-fatal
-        }
+      const disbursalResult = await manualDisbursalService.executeManualDisbursal({
+        companyId: req.companyId,
+        sourceAccountId: selectedAccount.account_id,
+        vendorId: `ADHOC_${selectedAccount.account_id}`,
+        vendorName: req.beneficiaryBank?.accountHolderName || `AdHoc Recipient (${selectedAccount.account_id})`,
+        amountUsdc: req.amountUsdc,
+        paymentRail: normalizedRail,
+        fiatDetails: req.beneficiaryBank,
+        cryptoDetails: {
+          walletAddress: (req.recipientAddress || req.cryptoDetails?.walletAddress || "0x0000000000000000000000000000000000000001") as `0x${string}`,
+          chainId: req.cryptoDetails?.chainId,
+          tokenSymbol: req.cryptoDetails?.tokenSymbol,
+          targetChain: req.cryptoDetails?.targetChain,
+          sessionKeyId: req.cryptoDetails?.sessionKeyId,
+          serviceUrl: req.cryptoDetails?.serviceUrl,
+        },
+        declaredReason: req.reason,
+        category: req.category || "DISCRETIONARY",
+        adminSignature: req.adminSignature,
+        clearanceCode: req.clearanceCode,
+        sprsRequestId: req.sprsRequestId,
+      });
 
-        const fiatRes = await this.toolRegistry.executeTool("convert_crypto_to_fiat_payout", {
-          sourceAccountId: selectedAccount.account_id,
-          amountUsdc: req.amountUsdc.toFixed(6),
-          beneficiaryBank: req.beneficiaryBank,
-          invoiceReference: `ADHOC_${instanceId}`,
+      if (!disbursalResult.success && disbursalResult.status === "ESCALATE_TO_SPRS") {
+        this.logTransition(instanceId, "STAGED_IN_DISBURSAL_VAULT", "SPRS_APPROVAL_REQUIRED", "SPRS_ESCALATED", {
+          sprsRequestId: disbursalResult.sprsRequestId,
         });
-        if (!fiatRes.success) throw new Error(fiatRes.error);
-        txHash = fiatRes.data.usdcBurnTxHash;
+        return {
+          success: false,
+          machineName: "AD_HOC_PAYMENT_STATE_MACHINE",
+          instanceId,
+          currentState: "SPRS_APPROVAL_REQUIRED",
+          data: { sprsRequestId: disbursalResult.sprsRequestId, accountId: selectedAccount.account_id },
+          unbrokenChainLog: [...this.transitionLog],
+        };
       }
+
+      if (!disbursalResult.success) {
+        throw new Error(disbursalResult.error || `Manual disbursal failed with status ${disbursalResult.status}`);
+      }
+
+      const txHash = disbursalResult.txHash || `0x${Date.now().toString(16)}`;
 
       // 5. Witnessing
       await this.witnessAgent.recordSettlementVoucher("SESSION_ADHOC", {
@@ -221,7 +246,11 @@ export class AdHocPaymentStateMachine {
 
       this.logTransition(instanceId, "STAGED_IN_DISBURSAL_VAULT", "WITNESSED_AND_COMPLETED", "SETTLED", {
         txHash,
-        rail,
+        rail: disbursalResult.rail,
+        subMethod: disbursalResult.subMethod,
+        fiatPayoutId: disbursalResult.fiatPayoutId,
+        cardPayoutRef: disbursalResult.cardPayoutRef,
+        imadOmadTrace: disbursalResult.imadOmadTrace,
       });
 
       // 6. Notify Machine 3
@@ -234,7 +263,16 @@ export class AdHocPaymentStateMachine {
         machineName: "AD_HOC_PAYMENT_STATE_MACHINE",
         instanceId,
         currentState: "WITNESSED_AND_COMPLETED",
-        data: { txHash, accountId: selectedAccount.account_id },
+        data: {
+          txHash,
+          accountId: selectedAccount.account_id,
+          rail: disbursalResult.rail,
+          subMethod: disbursalResult.subMethod,
+          fiatPayoutId: disbursalResult.fiatPayoutId,
+          cardPayoutRef: disbursalResult.cardPayoutRef,
+          imadOmadTrace: disbursalResult.imadOmadTrace,
+          journalSequenceId: disbursalResult.journalSequenceId,
+        },
         unbrokenChainLog: [...this.transitionLog],
       };
     } catch (err: any) {

@@ -11,6 +11,8 @@ import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
 import { MovementPolicyRepo } from "../database/repos/movementPolicyRepo.js";
 import { MathRulesQAEngine } from "./mathRulesQAEngine.js";
 import { SessionKeyRepo } from "../database/repos/sessionKeyRepo.js";
+import { VendorBankRepo } from "../database/repos/vendorBankRepo.js";
+import { VendorPaymentPreferenceRepo } from "../database/repos/vendorPaymentPreferenceRepo.js";
 import { TenantPolicyManager } from "../config/tenantPolicyManager.js";
 import { AccountRole } from "../types/policy.js";
 import { LiabilityCategory } from "../types/accounts.js";
@@ -234,11 +236,22 @@ export class OnboardingWizardService implements IOnboardingWizardService {
             throw new Error(`STEP_5_VALIDATION_ERROR: Liability amount must be positive. Received: ${liab.amountUsdc}`);
           }
 
-          const validRails = ["DISBURSAL_VAULT", "MODULAR_SESSION_KEY", "ERC3009_AUTHORIZATION", "GATEWAY_X402"];
-          const rail = liab.preferredPaymentRail || "DISBURSAL_VAULT";
-          if (!validRails.includes(rail)) {
-            throw new Error(`STEP_5_VALIDATION_ERROR: Invalid payment rail '${rail}'. Must be one of: ${validRails.join(", ")}`);
+          const validRails = [
+            "DISBURSAL_VAULT",
+            "MODULAR_SESSION_KEY",
+            "MODULAR_SESSION_KEYS",
+            "ERC3009_AUTHORIZATION",
+            "GATEWAY_X402",
+            "FIAT_PAYOUT",
+          ];
+          const rawRail = liab.preferredPaymentRail || (liab.fiatDetails ? "FIAT_PAYOUT" : "DISBURSAL_VAULT");
+          const rail = rawRail === "MODULAR_SESSION_KEYS" ? "MODULAR_SESSION_KEY" : rawRail;
+          if (!validRails.includes(rawRail)) {
+            throw new Error(`STEP_5_VALIDATION_ERROR: Invalid payment rail '${rawRail}'. Must be one of: ${validRails.join(", ")}`);
           }
+
+          const fiatDetails = liab.fiatDetails || (liab.paymentRailConfig?.beneficiaryBank ? liab.paymentRailConfig.beneficiaryBank : undefined);
+          const subMethod = liab.preferredSubMethod || fiatDetails?.paymentSubMethod || (fiatDetails?.cardToken ? "PUSH_TO_CARD" : (rail === "FIAT_PAYOUT" ? "FEDWIRE" : undefined));
 
           return {
             title: liab.title,
@@ -249,11 +262,18 @@ export class OnboardingWizardService implements IOnboardingWizardService {
             amountUsdc: amountNum,
             dueDate: liab.dueDate ? new Date(liab.dueDate).toISOString() : new Date(Date.now() + 14 * 86400 * 1000).toISOString(),
             frequencyCron: liab.frequencyCron || "0 0 1 * *",
-            payoutAddress: liab.payoutAddress || "0x0000000000000000000000000000000000000001",
-            serviceUrl: liab.serviceUrl || null,
+            payoutAddress: liab.payoutAddress || (rail === "FIAT_PAYOUT" ? null : "0x0000000000000000000000000000000000000001"),
+            serviceUrl: liab.serviceUrl || liab.cryptoDetails?.serviceEndpointUrl || null,
             poReference: liab.poReference || null,
             preferredPaymentRail: rail,
-            paymentRailConfig: liab.paymentRailConfig || {},
+            preferredSubMethod: subMethod,
+            fiatDetails: fiatDetails || null,
+            cryptoDetails: liab.cryptoDetails || null,
+            paymentRailConfig: {
+              ...(liab.paymentRailConfig || {}),
+              subMethod,
+              beneficiaryBank: fiatDetails,
+            },
             disbursalRules: liab.disbursalRules || {
               autoPayThresholdUsdc: 500,
               requireThreeWayMatch: true,
@@ -485,18 +505,65 @@ export class OnboardingWizardService implements IOnboardingWizardService {
         });
       }
 
-      // 3. Register Vendors & Provision Step 5 Liabilities
+      // 3. Register Vendors & Provision Step 5 Liabilities with Unified Fiat/Crypto Settings
       for (const liab of liabilities) {
-        const payoutAddr = (liab.payoutAddress || "0x0000000000000000000000000000000000000001") as `0x${string}`;
+        let bankAccountId: string | undefined;
+        const isFiat = liab.preferredPaymentRail === "FIAT_PAYOUT" || !!liab.fiatDetails;
+
+        // 3a. Register Bank Account if Fiat Details provided
+        if (isFiat) {
+          const fiat = liab.fiatDetails || liab.paymentRailConfig?.beneficiaryBank;
+          if (fiat) {
+            const subMethod = liab.preferredSubMethod || fiat.paymentSubMethod || (fiat.cardToken ? "PUSH_TO_CARD" : "FEDWIRE");
+            const bankRecord = await VendorBankRepo.createBankAccount({
+              vendor_id: liab.vendorId,
+              account_holder_name: fiat.accountHolderName || liab.vendorName || liab.vendorId,
+              iban_account_number: fiat.ibanOrAccountNumber || (fiat.accountNumber || "N/A"),
+              routing_swift: fiat.routingOrSwift || fiat.routingNumber || (subMethod === "PUSH_TO_CARD" ? "CARD_OCT" : "021000018"),
+              bank_name: fiat.bankName,
+              bank_country: fiat.bankCountry || "US",
+              payment_sub_method: subMethod,
+              card_token: fiat.cardToken || null,
+              card_last4: fiat.cardLast4 || (fiat.ibanOrAccountNumber && fiat.ibanOrAccountNumber.length === 16 ? fiat.ibanOrAccountNumber.slice(-4) : null),
+              card_network: fiat.cardNetwork || null,
+              is_verified: true,
+              verified_by_admin: "ONBOARDING_WIZARD",
+            });
+            bankAccountId = bankRecord.bank_account_id;
+          }
+        }
+
+        // 3b. Determine Verified Payout Address for Vendor Master
+        let payoutAddr = liab.payoutAddress;
+        if (!payoutAddr || typeof payoutAddr !== "string" || !payoutAddr.startsWith("0x") || payoutAddr.length !== 42) {
+          payoutAddr = liab.cryptoDetails?.walletAddress || "0x0000000000000000000000000000000000000001";
+        }
 
         // Register in Vendor Master Registry
         await VendorMasterRepo.registerVendor({
           vendor_id: liab.vendorId,
           name: liab.vendorName || liab.vendorId,
-          verified_payout_address: payoutAddr,
+          verified_payout_address: payoutAddr as `0x${string}`,
           verified_by_admin: "ONBOARDING_WIZARD",
           last_verified_at: new Date(),
           change_lock: true,
+        });
+
+        // 3c. Persist to VendorPaymentPreferenceRepo
+        await VendorPaymentPreferenceRepo.setPreference({
+          vendor_id: liab.vendorId,
+          preferred_rail: liab.preferredPaymentRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT"),
+          preferred_sub_method: liab.preferredSubMethod || null,
+          crypto_wallet_address: liab.cryptoDetails?.walletAddress || (payoutAddr !== "0x0000000000000000000000000000000000000001" ? payoutAddr : null),
+          crypto_chain_id: liab.cryptoDetails?.chainId ?? 5042,
+          crypto_token_symbol: liab.cryptoDetails?.tokenSymbol || "USDC",
+          bank_account_id: bankAccountId || null,
+          service_endpoint_url: liab.serviceUrl || liab.cryptoDetails?.serviceEndpointUrl || null,
+          session_key_id: liab.paymentRailConfig?.sessionKeyId || liab.cryptoDetails?.sessionKeyId || null,
+          configuration_payload: {
+            disbursalRules: liab.disbursalRules,
+            fiatDetails: liab.fiatDetails,
+          },
         });
 
         // Compute Document Hashes
@@ -504,6 +571,15 @@ export class OnboardingWizardService implements IOnboardingWizardService {
           ? keccak256(stringToHex(`PO:${liab.poReference}:${liab.amountUsdc}`))
           : null;
         const invHash = keccak256(stringToHex(`INV:${liab.title}:${liab.amountUsdc}:${Date.now()}`));
+
+        const updatedConfig = {
+          ...(liab.paymentRailConfig || {}),
+          subMethod: liab.preferredSubMethod,
+          bankAccountId,
+          serviceUrl: liab.serviceUrl || liab.cryptoDetails?.serviceEndpointUrl,
+          sessionKeyId: liab.paymentRailConfig?.sessionKeyId || liab.cryptoDetails?.sessionKeyId,
+          beneficiaryBank: liab.fiatDetails || liab.paymentRailConfig?.beneficiaryBank,
+        };
 
         await LiabilityRepo.createLiability({
           company_id: companyId,
@@ -514,12 +590,12 @@ export class OnboardingWizardService implements IOnboardingWizardService {
           amount_usdc: liab.amountUsdc,
           due_date: new Date(liab.dueDate),
           frequency_cron: liab.frequencyCron || "0 0 1 * *",
-          payout_address: payoutAddr,
+          payout_address: isFiat && !liab.payoutAddress?.startsWith("0x") ? (bankAccountId || liab.vendorId) : payoutAddr,
           source_po_hash: poHash,
           source_invoice_hash: invHash,
           status: "SCHEDULED",
-          preferred_payment_rail: liab.preferredPaymentRail || "DISBURSAL_VAULT",
-          payment_rail_config: liab.paymentRailConfig || {},
+          preferred_payment_rail: liab.preferredPaymentRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT"),
+          payment_rail_config: updatedConfig,
           disbursal_rules: liab.disbursalRules || {},
           waterfall_override: liab.waterfallOverride || null,
         });
@@ -532,7 +608,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
           await SessionKeyRepo.upsertSessionKey({
             session_key_id: sessionKeyId,
             account_id: liab.accountId,
-            allowed_recipient: payoutAddr,
+            allowed_recipient: payoutAddr as `0x${string}`,
             max_amount_per_cycle_usdc: maxCycleUsdc,
             cycle_duration_seconds: cycleDuration,
             current_cycle_spent_usdc: 0,

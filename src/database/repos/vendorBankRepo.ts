@@ -81,6 +81,14 @@ export class VendorBankRepo {
     return res.rows;
   }
 
+  public static async getBankAccountById(bankAccountId: string): Promise<VendorBankAccountRecord | null> {
+    const res = await DbClient.query(
+      `SELECT * FROM vendor_bank_accounts WHERE bank_account_id = $1 LIMIT 1;`,
+      [bankAccountId]
+    );
+    return res.rows[0] || null;
+  }
+
   public static async getVerifiedBankAccount(
     vendorId: string,
     ibanOrAccountNumber?: string

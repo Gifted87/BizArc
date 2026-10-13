@@ -30,7 +30,7 @@ export interface AffectedAccountSummary {
 export interface TargetRecipientDetails {
   vendorId: string;
   vendorName: string;
-  payoutAddress: `0x${string}`;
+  payoutAddress: `0x${string}` | string;
   isInVerifiedMaster: boolean;
   payeeAddressMatchesHistory: boolean;
 }

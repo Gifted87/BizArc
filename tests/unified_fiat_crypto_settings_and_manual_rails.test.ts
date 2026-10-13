@@ -11,6 +11,11 @@ import { MasterJournalRepo } from "../src/database/repos/masterJournalRepo.js";
 import { LiabilityRepo } from "../src/database/repos/liabilityRepo.js";
 import { VendorBankRepo } from "../src/database/repos/vendorBankRepo.js";
 import { FiatPayoutRepo } from "../src/database/repos/fiatPayoutRepo.js";
+import { VendorPaymentPreferenceRepo } from "../src/database/repos/vendorPaymentPreferenceRepo.js";
+import { OnboardingWizardService } from "../src/services/onboardingWizardService.js";
+import { LiabilityManagementService } from "../src/services/liabilityManagementService.js";
+import { UniversalPaymentRouter } from "../src/payments/universalPaymentRouter.js";
+import { AdHocPaymentStateMachine } from "../src/orchestration/stateMachines/AdHocPaymentStateMachine.js";
 
 describe("Unified Fiat & Crypto Payment Settings, Sub-Rails, and Account Funding Test Suite", () => {
   let settingsService: LiabilitySettingsService;
@@ -560,5 +565,209 @@ describe("Unified Fiat & Crypto Payment Settings, Sub-Rails, and Account Funding
     assert.strictEqual(fundRes.success, true);
     assert.strictEqual(fundRes.data.method, "FIAT_FEDWIRE");
     assert.ok(fundRes.data.trackingMemo);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PART 6: CORE SYSTEMIC UNIFICATION (ONBOARDING, CRUD & STATE MACHINES)
+  // ─────────────────────────────────────────────────────────────────────────────
+  it("Step 18: OnboardingWizardService Step 5 accepts FIAT_PAYOUT & activateOrganization provisions bank/preferences", async () => {
+    const wizard = new OnboardingWizardService();
+    const testOnboardingCo = `onboard_corp_${Date.now()}`;
+    const session = await wizard.createSession({
+      companyId: testOnboardingCo,
+      entryPath: "MANUAL",
+    });
+
+    // Step 1: Profile
+    await wizard.saveStepDraft(session.sessionId, 1, { companyName: "Onboard Corp" });
+    // Step 4: Accounts
+    await wizard.saveStepDraft(session.sessionId, 4, {
+      accounts: [
+        { accountId: `acc_${testOnboardingCo}_ops`, name: "Ops", role: "TREASURY_RESERVE" },
+      ],
+    });
+    // Step 5: Liabilities with FIAT_PAYOUT (Push-to-Card debit card)
+    const step5Session = await wizard.saveStepDraft(session.sessionId, 5, {
+      liabilities: [
+        {
+          title: "Contractor Payout",
+          accountId: `acc_${testOnboardingCo}_ops`,
+          vendorId: `vend_card_${testOnboardingCo}`,
+          vendorName: "Freelance Designer",
+          amountUsdc: 250.0,
+          preferredPaymentRail: "FIAT_PAYOUT",
+          preferredSubMethod: "PUSH_TO_CARD",
+          fiatDetails: {
+            accountHolderName: "Freelance Designer",
+            ibanOrAccountNumber: "4111111111111111",
+            routingOrSwift: "CARD_OCT",
+            cardToken: "tok_debit_card_9999",
+            cardLast4: "1111",
+            cardNetwork: "VISA",
+          },
+        },
+      ],
+    });
+
+    assert.strictEqual(step5Session.draftPayload.step5_liabilities.length, 1);
+    assert.strictEqual(step5Session.draftPayload.step5_liabilities[0].preferredPaymentRail, "FIAT_PAYOUT");
+    assert.strictEqual(step5Session.draftPayload.step5_liabilities[0].preferredSubMethod, "PUSH_TO_CARD");
+
+    // Activate organization
+    const activation = await wizard.activateOrganization(session.sessionId);
+    assert.strictEqual(activation.success, true);
+
+    // Verify bank account was provisioned in VendorBankRepo
+    const bank = await VendorBankRepo.getVerifiedBankAccount(`vend_card_${testOnboardingCo}`);
+    assert.ok(bank);
+    assert.strictEqual(bank.payment_sub_method, "PUSH_TO_CARD");
+    assert.strictEqual(bank.card_last4, "1111");
+
+    // Verify preferences were provisioned in VendorPaymentPreferenceRepo
+    const pref = await VendorPaymentPreferenceRepo.getPreference(`vend_card_${testOnboardingCo}`);
+    assert.ok(pref);
+    assert.strictEqual(pref.preferred_rail, "FIAT_PAYOUT");
+    assert.strictEqual(pref.preferred_sub_method, "PUSH_TO_CARD");
+  });
+
+  it("Step 19: LiabilityManagementService creates and updates liabilities with multi-modal preferences", async () => {
+    const liabMgmt = new LiabilityManagementService();
+    const vendorId = `vend_mgmt_${Date.now()}`;
+
+    // Create liability with ACH Fiat details
+    const created = await liabMgmt.createLiability(testCompanyId, {
+      accountId: testOperatingAccountId,
+      vendorId,
+      vendorName: "Enterprise SaaS Landlord",
+      title: "HQ Office Rent",
+      category: "SAAS",
+      amountUsdc: 3000.0,
+      dueDate: new Date(Date.now() + 7 * 86400 * 1000),
+      preferredPaymentRail: "FIAT_PAYOUT",
+      preferredSubMethod: "ACH",
+      fiatDetails: {
+        accountHolderName: "HQ Office Landlord",
+        ibanOrAccountNumber: "3322110099",
+        routingOrSwift: "021000018",
+        bankName: "Wells Fargo",
+      },
+    });
+
+    assert.ok(created.liability_id);
+    assert.strictEqual(created.preferred_payment_rail, "FIAT_PAYOUT");
+    assert.strictEqual(created.payment_rail_config?.subMethod, "ACH");
+
+    // Verify preference was recorded
+    const prefBefore = await VendorPaymentPreferenceRepo.getPreference(vendorId);
+    assert.ok(prefBefore);
+    assert.strictEqual(prefBefore.preferred_rail, "FIAT_PAYOUT");
+
+    // Update liability to switch to crypto session keys
+    const updated = await liabMgmt.updateLiability(testCompanyId, created.liability_id, {
+      preferredPaymentRail: "MODULAR_SESSION_KEY",
+      cryptoDetails: {
+        walletAddress: "0x3333333333333333333333333333333333333333",
+        sessionKeyId: `sess_${vendorId}`,
+      },
+    });
+
+    assert.strictEqual(updated.preferred_payment_rail, "MODULAR_SESSION_KEY");
+    const prefAfter = await VendorPaymentPreferenceRepo.getPreference(vendorId);
+    assert.ok(prefAfter);
+    assert.strictEqual(prefAfter.preferred_rail, "MODULAR_SESSION_KEY");
+  });
+
+  it("Step 20: UniversalPaymentRouter auto-resolves VendorPaymentPreferenceRepo and executes seamlessly", async () => {
+    const router = new UniversalPaymentRouter();
+    const vendorAutoPref = `vend_autopref_${Date.now()}`;
+
+    // Set preference in registry as FIAT_PAYOUT with Push-to-Card details
+    const bank = await VendorBankRepo.createBankAccount({
+      vendor_id: vendorAutoPref,
+      account_holder_name: "Instant Contractor",
+      iban_account_number: "4222222222222222",
+      routing_swift: "CARD_OCT",
+      payment_sub_method: "PUSH_TO_CARD",
+      card_last4: "2222",
+      card_token: "tok_auto_card",
+      card_network: "VISA",
+      is_verified: true,
+      verified_by_admin: "ADMIN",
+    });
+
+    await VendorPaymentPreferenceRepo.setPreference({
+      vendor_id: vendorAutoPref,
+      preferred_rail: "FIAT_PAYOUT",
+      preferred_sub_method: "PUSH_TO_CARD",
+      bank_account_id: bank.bank_account_id,
+    });
+
+    // Execute via UniversalPaymentRouter WITHOUT passing beneficiaryBank in intent
+    const result = await router.routeAndExecute({
+      intent: {
+        intentId: `AUTOPREF_${Date.now()}`,
+        primaryAccountId: testOperatingAccountId,
+        vendorId: vendorAutoPref,
+        vendorName: "Instant Contractor",
+        amountUsdc: 150.0,
+        declaredReason: "Automatic preference resolution test",
+      },
+    });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.rail, "FIAT_PAYOUT");
+    assert.strictEqual(result.subMethod, "PUSH_TO_CARD");
+    assert.ok(result.cardPayoutRef);
+  });
+
+  it("Step 21: AdHocPaymentStateMachine executes real disbursal through ManualDisbursalService without mock hashes", async () => {
+    const adHocMachine = new AdHocPaymentStateMachine();
+
+    const adHocResult = await adHocMachine.processPayment({
+      companyId: testCompanyId,
+      requestedAccountId: testOperatingAccountId,
+      amountUsdc: 75.0,
+      reason: "Urgent vendor reimbursement",
+      paymentRail: "FIAT_PAYOUT",
+      beneficiaryBank: {
+        accountHolderName: "Rapid Reimbursed Employee",
+        ibanOrAccountNumber: "4333333333333333",
+        routingOrSwift: "CARD_OCT",
+        cardToken: "tok_employee_card",
+        cardLast4: "3333",
+        cardNetwork: "MASTERCARD",
+      },
+    });
+
+    assert.strictEqual(adHocResult.success, true);
+    assert.strictEqual(adHocResult.currentState, "WITNESSED_AND_COMPLETED");
+    assert.strictEqual(adHocResult.data.rail, "FIAT_PAYOUT");
+    assert.strictEqual(adHocResult.data.subMethod, "PUSH_TO_CARD");
+    assert.ok(adHocResult.data.cardPayoutRef);
+    assert.ok(adHocResult.data.txHash);
+    // Real Arc Burn Tx Hash (not Date.now() mock)
+    assert.ok(adHocResult.data.txHash.length > 20);
+  });
+
+  it("Step 22: Circle Mint webhook deposit reconciles deposit and triggers yield recalculation", async () => {
+    const webhookRes = await fetch(`http://localhost:${serverPort}/api/webhooks/circle-mint`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${DEFAULT_API_KEY}`,
+      },
+      body: JSON.stringify({
+        type: "payments.paid",
+        accountId: testOperatingAccountId,
+        amountUsdc: "5000.00",
+        trackingMemo: `BIZARC-MINT-${testOperatingAccountId}-WHKTEST`,
+      }),
+    });
+
+    assert.strictEqual(webhookRes.status, 200);
+    const data = await webhookRes.json();
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.status, "DEPOSIT_RECONCILED");
+    assert.strictEqual(data.amountUsdc, 5000.0);
   });
 });
