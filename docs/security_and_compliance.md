@@ -173,9 +173,13 @@ The tool `trigger_emergency_circuit_breaker` allows any cognitive agent or human
 
 ## 8. Verification and Reference Files
 
+- Problem & Governance Philosophy: [problem_and_solution_philosophy.md](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/problem_and_solution_philosophy.md)
+- Enterprise Onboarding Guide: [enterprise_onboarding_guide.md](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/enterprise_onboarding_guide.md)
+- Architecture Overview: [architecture_overview.md](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/architecture_overview.md)
 - Authorization Gate: [authorizationGate.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/security/authorizationGate.ts)
 - Enforcer Compliance Agent: [policyComplianceLlmAgent.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/agents/policyComplianceLlmAgent.ts)
 - Clearance Codes Repository: [clearanceCodeRepo.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/clearanceCodeRepo.ts)
 - Permission Requests Repository: [permissionRequestRepo.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/permissionRequestRepo.ts)
 - Production Readiness Service: [productionReadinessService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/productionReadinessService.ts)
 - Disbursal Vault Contract: [DisbursalVault.sol](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/DisbursalVault.sol)
+

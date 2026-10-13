@@ -1,10 +1,19 @@
 # BizArc Autonomous Treasury: Architecture & System Overview
 
-## 1. Executive Summary
+## 1. Executive Summary & Core Motivation
 
 **BizArc** is an Autonomous Multi-Agent Corporate Treasury & Financial Operations Platform purpose-built for **Arc L1** (Circle's Layer-1 blockchain where USDC is the native gas token) and global banking networks.
 
-Traditional corporate treasury relies on error-prone manual reviews, fragmented banking portals, and disconnected crypto wallets. BizArc automates enterprise financial operations by combining:
+Traditional corporate treasury relies on error-prone manual reviews, fragmented banking portals, and disconnected crypto wallets. BizArc directly resolves the three fundamental corporate finance bottlenecks:
+1. **Idle Capital Drag**: Working capital sits idle in 0% checking accounts. BizArc automates continuous sweeps to **Hashnote USYC (~5% APY)** on Arc L1 while maintaining a **Parallel Tripartite Balance** ($B_E = B_L + B_Y$) so available purchasing power is preserved for all treasury decisions, accompanied by sub-second liquidity recall.
+2. **Subscription Sprawl Across Accounts**: Administrators lose visibility over hundreds of recurring SaaS and vendor liabilities. BizArc's **48-Hour Pre-Flight Radar** alerts the in-charge admin with full context and binary choices: `APPROVE` or `CANCEL_WITH_INSTRUCTIONS`, governed by Standardized Permission Requests (SPRS).
+3. **Fragmented Account Liquidity & Routing**: Dispersed accounts create payment routing chaos. BizArc introduces a **Transient Disbursal Account ($0 at rest)**, unified cross-account asset visibility, and algorithmic waterfall allocation strictly shielding payroll.
+
+For exhaustive breakdowns of these core principles, consult the dedicated companion guides:
+- **[Problem, Solution & Governance Philosophy](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/problem_and_solution_philosophy.md)**: Deep dive into the 3 Core Problems, Algorithmic Solutions, Parallel Balances, Inside vs. Outside the Rules, and the 4 Core Agent Capabilities.
+- **[Enterprise Onboarding & Lifecycle Guide](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/enterprise_onboarding_guide.md)**: Complete guide to the 6-Step Manual Q&A Wizard, Connected Workspace/ERP MCP draft prefill, and post-onboarding lifecycle.
+
+BizArc unifies these capabilities by combining:
 1. **The 6 Golden Rules of Enterprise Ledgers** (based on *Canteen: Agents & Ledgers in 2026*).
 2. **The Tripartite Invariant** ($B_E = B_L + B_Y$) maintaining absolute balance integrity between liquid cash and yield-bearing reserves.
 3. **True Enterprise Duality**: Seamless, automatic routing across both crypto rails (Arc L1, CCTP, Session Keys, x402) and non-crypto commercial banking rails (Fedwire, ACH, Push-to-Card, SEPA, SWIFT via Circle Mint).
