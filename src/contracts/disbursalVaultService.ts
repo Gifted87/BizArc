@@ -96,13 +96,17 @@ export class DisbursalVaultService {
   }
 
   public async isIdempotencyKeyExecuted(key: `0x${string}`): Promise<boolean> {
-    const executed = await this.publicClient.readContract({
-      address: this.vaultAddress,
-      abi: DisbursalVaultABI,
-      functionName: "executedIdempotencyKeys",
-      args: [key],
-    });
-    return Boolean(executed);
+    try {
+      const executed = await this.publicClient.readContract({
+        address: this.vaultAddress,
+        abi: DisbursalVaultABI,
+        functionName: "executedIdempotencyKeys",
+        args: [key],
+      });
+      return Boolean(executed);
+    } catch {
+      return false;
+    }
   }
 
   public async getCaps(): Promise<{

@@ -25,7 +25,12 @@
     "test:d0_b": "tsx tests/d0_b_onboarding.test.ts",
     "test:d9_erp": "tsx tests/d9_erp_connectors_real_world.test.ts",
     "test:swarm": "tsx tests/swarm_e2e_real_world.test.ts",
-    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts && tsx tests/d3_contracts.test.ts && tsx tests/d0_semantic.test.ts && tsx tests/d0_b_onboarding.test.ts && tsx tests/d4_d5_d6.test.ts && tsx tests/audit_d0_real_world.test.ts && tsx tests/audit_d7_real_world.test.ts && tsx tests/audit_d8_real_world.test.ts && tsx tests/audit_d9_real_world.test.ts && tsx tests/d9_erp_connectors_real_world.test.ts && tsx tests/d10_treasury_sentinel.test.ts && tsx tests/swarm_e2e_real_world.test.ts"
+    "test:d13": "tsx --test tests/d10_d13_predictive_refunder.test.ts",
+    "test:d14d15": "tsx tests/d14_d15_unified_aggregator_disbursal_router.test.ts",
+    "test:d20": "tsx --test tests/d20_unified_operational_state.test.ts",
+    "test:d21": "tsx --test tests/d21_end_to_end_scenarios.test.ts",
+    "test:fiat_swap": "tsx --test tests/fiat_and_swap_rails.test.ts && tsx --test tests/holistic_fiat_and_swap_ecosystem.test.ts",
+    "test": "tsx tests/d1_environment.test.ts && tsx tests/d2_foundation.test.ts && tsx tests/d3_contracts.test.ts && tsx tests/d0_semantic.test.ts && tsx tests/d0_b_onboarding.test.ts && tsx tests/d4_d5_d6.test.ts && tsx tests/audit_d0_real_world.test.ts && tsx tests/audit_d7_real_world.test.ts && tsx tests/audit_d8_real_world.test.ts && tsx tests/audit_d9_real_world.test.ts && tsx tests/d9_erp_connectors_real_world.test.ts && tsx tests/d10_treasury_sentinel.test.ts && tsx --test tests/d10_d13_predictive_refunder.test.ts && tsx tests/swarm_e2e_real_world.test.ts && tsx tests/d14_d15_unified_aggregator_disbursal_router.test.ts && tsx --test tests/d20_unified_operational_state.test.ts && tsx --test tests/d21_end_to_end_scenarios.test.ts && tsx --test tests/fiat_and_swap_rails.test.ts && tsx --test tests/holistic_fiat_and_swap_ecosystem.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -41,7 +46,11 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@circle-fin/adapter-circle-wallets": "^1.8.1",
+    "@circle-fin/adapter-viem-v2": "^1.19.0",
     "@circle-fin/developer-controlled-wallets": "^10.6.0",
+    "@circle-fin/swap-kit": "^1.7.1",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "dotenv": "^18.0.5",
     "pg": "^8.23.1",
     "viem": "^2.57.2",

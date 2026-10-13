@@ -1,17 +1,36 @@
 export type AccountRole =
   | "OPEX_DEV"
+  | "OPEX_INFRA"
   | "OPEX_GROWTH"
+  | "OPEX_MARKETING"
+  | "OPEX_SALES"
+  | "OPEX_SUPPORT"
+  | "OPEX_RND"
+  | "OPEX_PRODUCT"
+  | "OPEX_DESIGN"
   | "PAYROLL"
   | "TREASURY_RESERVE"
-  | "CAPEX";
+  | "CAPEX"
+  | string;
 
 export type RedemptionLatencyTier =
   | "TIER_A_INSTANT"   // ~15 min / 300-900s instant onchain liquidity
   | "TIER_B_BATCH_T0"  // ~8 hours daily batch
   | "TIER_C_BATCH_T1"; // ~24 hours standard mutual fund queue
 
+export interface LiabilityDisbursalRules {
+  liability_id?: string;
+  autoPayThresholdUsdc: number;
+  requireThreeWayMatch: boolean;
+  preFlightLeadTimeHours: number;
+  stealthPriceCreepTolerancePct?: number;
+  preferredPaymentRail: string;
+  paymentRailConfig?: Record<string, any>;
+}
+
 export interface OperatingAccountPolicy {
   account_id: string;
+  company_id?: string;
   name: string;
   role: AccountRole;
   min_floor_usdc: number;
@@ -20,7 +39,12 @@ export interface OperatingAccountPolicy {
   authorized_categories: string[];
   max_autonomous_sweep_limit: number;
   exclude_from_waterfall_draws: boolean;
+  per_tx_cap_usdc?: number;
+  daily_cap_usdc?: number;
+  weekly_cap_usdc?: number;
+  monthly_cap_usdc?: number;
 }
+
 
 export interface InvestmentRulesPolicy {
   target_vault: string;

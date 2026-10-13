@@ -14,6 +14,11 @@ import { ViemWalletAdapter } from "../foundation/wallets/viemWalletAdapter.js";
 import { CentralTreasuryYieldVaultService } from "../contracts/centralTreasuryYieldVaultService.js";
 import { CentralTreasuryYieldVaultABI } from "../contracts/artifacts.js";
 import { USDC_ABI } from "../foundation/usdc/usdcAbi.js";
+import { McpAppConnector } from "../connectors/mcpAppConnector.js";
+import { CompanyProfileRepo, CompanyProfileRecord } from "../database/repos/companyProfileRepo.js";
+import { MovementPolicyRepo } from "../database/repos/movementPolicyRepo.js";
+import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
+import { PolicyLoader } from "../config/policyLoader.js";
 
 export interface ErpSupplierRecord {
   supplierId: string;
@@ -163,6 +168,100 @@ export class EnterpriseOnboardingService {
       discoveredSuppliers: suppliers,
       discoveredLiabilities: invoices,
     };
+  }
+
+  /**
+   * Phase 1.B: Automated Enterprise Company Profile Creation from Ingested & Connected Data
+   * Gathers unstructured documents and receipts across connected MCP apps (Google Workspace, Microsoft 365)
+   * and ERPs, classifies the dual rules (mathematical rules + declared policies), and saves to PostgreSQL company_profiles.
+   */
+  public async createCompanyProfileFromConnectedData(params: {
+    companyId: string;
+    companyName: string;
+    businessDescription?: string;
+    includeMcpApps?: boolean;
+    costCenters?: Array<{ id: string; name: string; role: AccountRole }>;
+    erpInvoices?: ErpPurchaseInvoiceRecord[];
+    erpSuppliers?: ErpSupplierRecord[];
+  }): Promise<CompanyProfileRecord> {
+    const mcpConnector = new McpAppConnector({
+      googleAppsConnected: params.includeMcpApps ?? true,
+      microsoftAppsConnected: params.includeMcpApps ?? true,
+    });
+
+    const mcpData = await mcpConnector.aggregateAllCompanyAppData();
+
+    // Map discovered cost centers
+    const discoveredCostCenters = (params.costCenters || [
+      { id: "acc_engineering", name: "Engineering Operations", role: "OPEX_DEV" as AccountRole },
+      { id: "acc_payroll", name: "Payroll Escrow", role: "PAYROLL" as AccountRole },
+      { id: "acc_marketing", name: "Growth & Marketing", role: "OPEX_GROWTH" as AccountRole },
+      { id: "acc_general_treasury", name: "Central Treasury Reserve", role: "TREASURY_RESERVE" as AccountRole },
+    ]).map((cc) => ({
+      accountId: cc.id,
+      name: cc.name,
+      role: cc.role,
+      allocatedMonthlySpendUsdc: cc.role === "PAYROLL" ? 25000 : 5000,
+    }));
+
+    // Classify Two Types of Rules: Mathematical Rules vs Declared Policies
+    const operatingCashFloors: Record<string, number> = {};
+    for (const cc of discoveredCostCenters) {
+      operatingCashFloors[cc.accountId] =
+        cc.role === "PAYROLL" ? 100.0 : cc.role === "TREASURY_RESERVE" ? 250.0 : 50.0;
+    }
+
+    const mathematicalRules = {
+      operatingCashFloors,
+      safetyBufferMultipliers: {
+        standardOpex: 1.20,
+        payrollReserve: 1.25,
+      },
+      spendingHardCaps: {
+        dailyHardCapUsdc: 5000.0,
+        singleTxHumanGateThresholdUsdc: 500.0,
+      },
+      hysteresisDeadbandUsdc: 10.0,
+      minSweepAmountUsdc: 10.0,
+      precisionDecimals: 6,
+    };
+
+    const declaredPolicies = {
+      costCenterRules: [
+        "Rule 1: Under no circumstances may funds from acc_payroll be swept to yield or used for non-payroll draws.",
+        "Rule 2: Vendor invoice payouts require Three-Way Match (PO + Delivery Receipt + Invoice).",
+        "Rule 3: Payout address must strictly match immutable Verified Vendor Master Registry.",
+      ],
+      anomalyTolerances: {
+        maxPriceHikePercentage: 15.0,
+        flagUnregisteredVendors: true,
+        requireThreeWayMatch: true,
+      },
+      reviewTriggers: [
+        "Upcoming renewals > $1,000 must generate 48-hour pre-flight SPRS.",
+        "SaaS subscriptions with > 15% price hike require administrative confirmation.",
+      ],
+    };
+
+    const connectedApps = [
+      "ERP System (ERPNext / Odoo REST & JSON-RPC)",
+      ...mcpData.connectedApps,
+    ];
+
+    const profileRecord: CompanyProfileRecord = {
+      company_id: params.companyId,
+      company_name: params.companyName,
+      business_description: params.businessDescription || "Autonomous treasury operations on Arc L1",
+      connected_apps: connectedApps,
+      discovered_cost_centers: discoveredCostCenters,
+      inferred_policies: {
+        mathematicalRules,
+        declaredPolicies,
+      },
+      activation_status: "PENDING_ACTIVATION",
+    };
+
+    return await CompanyProfileRepo.upsertProfile(profileRecord);
   }
 
   /**
@@ -347,6 +446,24 @@ export class EnterpriseOnboardingService {
       scheduledLiabilities.push(liability);
     }
 
+    // Seed Movement Policy for cross-account liquidity and strict payroll shielding
+    const nonPayrollIds = createdAccounts
+      .filter((a) => a.role !== "PAYROLL")
+      .map((a) => a.account_id);
+    const payrollIds = createdAccounts
+      .filter((a) => a.role === "PAYROLL")
+      .map((a) => a.account_id);
+
+    await MovementPolicyRepo.upsertPolicy({
+      policy_id: `movement_policy_${profile.companyName.toLowerCase().replace(/\s+/g, "_")}`,
+      name: `${profile.companyName} Cross-Account Movement Policy`,
+      priority_order: nonPayrollIds.length > 0 ? nonPayrollIds : createdAccounts.map((a) => a.account_id),
+      protected_accounts: payrollIds,
+      cross_account_borrowing_enabled: true,
+      max_borrowing_ratio: 0.50,
+      human_approval_threshold_usdc: committedPolicy.spending_limits?.single_tx_human_gate_threshold_usdc || 1000.0,
+    });
+
     const genesisDocRef = `DOC:GENESIS:${profile.companyName.replace(/\s+/g, "_")}`;
     const initialAllocationUsdc =
       committedPolicy.operating_accounts.reduce((sum, acc) => sum + acc.min_floor_usdc, 0) || 100.0;
@@ -390,6 +507,17 @@ export class EnterpriseOnboardingService {
         };
       })
     );
+
+    // Initialize Dynamic Record 2 (Safe-to-Invest & Tripartite Balance) for each account for the first time
+    const dynamicRecords = new DynamicRecordsService();
+    for (const acc of createdAccounts) {
+      const matchingPolicy = committedPolicy.operating_accounts.find((p) => p.account_id === acc.account_id);
+      const floorStr = (matchingPolicy?.min_floor_usdc || 50.0).toFixed(6);
+      await dynamicRecords.calculateSafeToInvest(acc.account_id, 7 * 86400, floorStr, 0n, 0n);
+    }
+
+    // Set dynamic policies live into PolicyLoader for runtime swarm evaluation
+    PolicyLoader.setDynamicProfile(committedPolicy, profile.companyName);
 
     return {
       accountsCreated: createdAccounts,
@@ -452,7 +580,7 @@ export class EnterpriseOnboardingService {
       const nativeBalance = await publicClient.getBalance({ address: account.wallet_address });
       currentBalanceUsdc = Number(nativeBalance / 10n ** 12n) / 1_000_000;
     } catch {
-      currentBalanceUsdc = 100.0;
+      currentBalanceUsdc = 0.0;
     }
 
     const isFunded = currentBalanceUsdc >= minDepositUsdc;
@@ -556,6 +684,12 @@ export class EnterpriseOnboardingService {
       post_state_snapshot: { status: "ACTIVATED", balanceUsdc: amountUsdc },
     });
 
+    // Recalculate Dynamic Record 2 (Safe-to-Invest & Tripartite Balance) upon funding
+    const dynamicRecords = new DynamicRecordsService();
+    const rawDeposit = BigInt(Math.round(amountUsdc * 1_000_000));
+    const floorStr = (account.min_operating_floor_usdc || 50.0).toFixed(6);
+    await dynamicRecords.calculateSafeToInvest(accountId, 7 * 86400, floorStr, rawDeposit, 0n);
+
     return {
       accountId,
       txHash,
@@ -564,5 +698,85 @@ export class EnterpriseOnboardingService {
       status: "ACTIVATED",
     };
   }
+
+  /**
+   * Onboard Recurring Liabilities for an Account (Dynamic Record 1 & 2)
+   * Registers suppliers in Vendor Master Registry and schedules their recurring subscriptions/debts.
+   */
+  public async onboardAccountRecurringLiabilities(params: {
+    accountId: string;
+    recurringLiabilities: Array<{
+      vendorId: string;
+      vendorName: string;
+      payoutAddress: `0x${string}`;
+      paymentEndpointUrl?: string;
+      payoutRail?: "DISBURSAL_VAULT" | "MODULAR_SESSION_KEY" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402";
+      title: string;
+      category?: string;
+      amountUsdc: number;
+      dueDate: string | Date;
+      frequencyCron?: string;
+      poReference?: string;
+    }>;
+  }): Promise<{
+    vendorsRegistered: VendorMasterRecord[];
+    liabilitiesScheduled: LiabilityDbRecord[];
+    initialSafeToInvestUsdc: string;
+  }> {
+    const { accountId, recurringLiabilities } = params;
+    const account = await TreasuryAccountsRepo.getAccountById(accountId);
+    if (!account) {
+      throw new Error(`[EnterpriseOnboardingService] Account ${accountId} not found in registry`);
+    }
+
+    const registeredVendors: VendorMasterRecord[] = [];
+    const scheduledLiabilities: LiabilityDbRecord[] = [];
+
+    for (const item of recurringLiabilities) {
+      let vendor = await VendorMasterRepo.getVendorById(item.vendorId);
+      if (!vendor) {
+        vendor = await VendorMasterRepo.registerVendor({
+          vendor_id: item.vendorId,
+          name: item.vendorName,
+          verified_payout_address: item.payoutAddress,
+          verified_by_admin: "ONBOARDING_RECURRING_LIA",
+          last_verified_at: new Date(),
+          change_lock: true,
+        });
+        registeredVendors.push(vendor);
+      }
+
+      const poHash = item.poReference
+        ? keccak256(stringToHex(`PO:${item.poReference}:${item.amountUsdc}`))
+        : undefined;
+      const invoiceHash = keccak256(stringToHex(`INV:${item.title}:${item.amountUsdc}`));
+
+      const liability = await LiabilityRepo.createLiability({
+        account_id: accountId,
+        vendor_id: item.vendorId,
+        title: item.title,
+        category: (item.category as any) || "SUBSCRIPTION",
+        amount_usdc: item.amountUsdc,
+        due_date: new Date(item.dueDate),
+        payout_address: item.payoutAddress,
+        frequency_cron: item.frequencyCron || "0 0 1 * *",
+        source_po_hash: poHash,
+        source_invoice_hash: invoiceHash,
+        status: "SCHEDULED",
+      });
+      scheduledLiabilities.push(liability);
+    }
+
+    const dynamicRecords = new DynamicRecordsService();
+    const floorStr = (account.min_operating_floor_usdc || 50.0).toFixed(6);
+    const sti = await dynamicRecords.calculateSafeToInvest(accountId, 7 * 86400, floorStr);
+
+    return {
+      vendorsRegistered: registeredVendors,
+      liabilitiesScheduled: scheduledLiabilities,
+      initialSafeToInvestUsdc: sti.safeToInvestUsdc,
+    };
+  }
 }
+
 

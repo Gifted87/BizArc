@@ -14,6 +14,8 @@ Your primary mandate is Golden Rule 1 & Golden Rule 4:
 5. Guarantee idempotency: reject duplicate execution attempts.`,
       allowedTools: [
         "post_document_linked_gl",
+        "witness_and_reconcile",
+        "get_unified_operational_state",
         "query_vector_memory",
         "read_dynamic_records",
       ],

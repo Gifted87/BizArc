@@ -12,6 +12,15 @@ export class PolicyValidationError extends Error {
 
 export class PolicyLoader {
   private static cachedConfig: BusinessPolicyConfig | null = null;
+  private static dynamicProfile: { profileName: string; profile: PolicyProfile } | null = null;
+
+  public static setDynamicProfile(profile: PolicyProfile, profileName: string = "DYNAMIC_ONBOARDED"): void {
+    this.dynamicProfile = { profileName, profile };
+  }
+
+  public static clearDynamicProfile(): void {
+    this.dynamicProfile = null;
+  }
 
   public static loadConfig(filePath?: string): BusinessPolicyConfig {
     if (this.cachedConfig && !filePath) {
@@ -35,9 +44,13 @@ export class PolicyLoader {
   }
 
   public static getActiveProfile(filePath?: string): {
-    profileName: "PRODUCTION_TESTNET" | "PRODUCTION" | "HACKATHON_DEMO";
+    profileName: "PRODUCTION_TESTNET" | "PRODUCTION" | "HACKATHON_DEMO" | string;
     profile: PolicyProfile;
   } {
+    if (this.dynamicProfile) {
+      return this.dynamicProfile as any;
+    }
+
     const config = this.loadConfig(filePath);
     const profileName = config.active_profile;
     const profile = config.profiles[profileName];

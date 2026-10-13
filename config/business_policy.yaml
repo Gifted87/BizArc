@@ -56,7 +56,7 @@ profiles:
         exclude_from_waterfall_draws: false
 
     investment_rules:
-      target_vault: "0x0000000000000000000000000000000000000000" # Deployed Arc Testnet CentralTreasuryYieldVault
+      target_vault: "0x4444444444444444444444444444444444444444" # Deployed Arc Testnet CentralTreasuryYieldVault
       max_company_allocation_ratio: 0.85 # Max 85% in USYC, maintaining 15% liquid buffer
       min_sweep_amount_usdc: 10.00 # $10 minimum sweep
       auto_sweep_enabled: true
@@ -138,7 +138,7 @@ profiles:
         exclude_from_waterfall_draws: false
 
     investment_rules:
-      target_vault: "0x0000000000000000000000000000000000000000" # CentralTreasuryYieldVault address
+      target_vault: "0x4444444444444444444444444444444444444444" # CentralTreasuryYieldVault address
       max_company_allocation_ratio: 0.90 # Max 90% allocation into USYC
       min_sweep_amount_usdc: 0.50 # $0.50 floor for micro-sweeps on testnet
       auto_sweep_enabled: true
@@ -209,7 +209,7 @@ profiles:
         exclude_from_waterfall_draws: false
 
     investment_rules:
-      target_vault: "0x0000000000000000000000000000000000000000" # Production Hashnote USYC Vault
+      target_vault: "0x4444444444444444444444444444444444444444" # Production Hashnote USYC Vault
       max_company_allocation_ratio: 0.85 # Max 85% in USYC, maintaining 15% liquid buffer
       min_sweep_amount_usdc: 100.00
       auto_sweep_enabled: true

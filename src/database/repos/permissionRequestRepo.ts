@@ -1,6 +1,6 @@
 import { DbClient } from "../dbClient.js";
 
-export type PermissionRequestStatus = "PENDING" | "APPROVED" | "REJECTED" | "EXECUTED";
+export type PermissionRequestStatus = "PENDING" | "APPROVED" | "REJECTED" | "EXECUTED" | "CANCELLED";
 
 export interface PermissionRequestRecord {
   request_id: string;
@@ -65,11 +65,25 @@ export class PermissionRequestRepo {
     }));
   }
 
-  public static async updateStatus(params: {
-    requestId: string;
-    status: PermissionRequestStatus;
-    adminInstruction?: string;
-  }): Promise<void> {
+  public static async updateStatus(
+    arg1: string | { requestId: string; status: PermissionRequestStatus; adminInstruction?: string },
+    arg2?: PermissionRequestStatus,
+    arg3?: string
+  ): Promise<void> {
+    let requestId: string;
+    let status: PermissionRequestStatus;
+    let adminInstruction: string | null = null;
+
+    if (typeof arg1 === "object") {
+      requestId = arg1.requestId;
+      status = arg1.status;
+      adminInstruction = arg1.adminInstruction || null;
+    } else {
+      requestId = arg1;
+      status = arg2!;
+      adminInstruction = arg3 || null;
+    }
+
     const text = `
       UPDATE permission_requests
       SET status = $1,
@@ -78,9 +92,9 @@ export class PermissionRequestRepo {
       WHERE request_id = $3;
     `;
     await DbClient.query(text, [
-      params.status,
-      params.adminInstruction || null,
-      params.requestId,
+      status,
+      adminInstruction,
+      requestId,
     ]);
   }
 }

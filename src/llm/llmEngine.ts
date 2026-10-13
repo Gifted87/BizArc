@@ -1,3 +1,6 @@
+import crypto from "crypto";
+import { keccak256, stringToHex } from "viem";
+import { ClearanceCodeRepo } from "../database/repos/clearanceCodeRepo.js";
 import {
   LlmEngineConfig,
   LlmMessage,
@@ -28,7 +31,7 @@ export class UniversalOpenAiCompatibleEngine implements ILlmEngine {
   private defaultTemperature: number;
   private defaultMaxTokens: number;
 
-  constructor(config: LlmEngineConfig) {
+  constructor(config: Partial<LlmEngineConfig> = {}) {
     this.apiKey =
       config.apiKey ||
       process.env.OPENROUTER_API_KEY ||
@@ -171,7 +174,7 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
     const content = (lastMsg?.content || "").toLowerCase();
     const systemPrompt = (systemMsg?.content || "").toLowerCase();
 
-    // If the last message was a tool result, synthesize the final answer based on the real result
+    // If the last message was a tool result, determine if follow-up tool execution is needed
     if (lastMsg?.role === "tool") {
       let parsedResult: any = {};
       try {
@@ -185,12 +188,233 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
           content: `Deliberation Conclusion: Operation halted. Invariant check failed: ${parsedResult.error || "Unknown rejection"}. Escalating alert to compliance auditor.`,
           finish_reason: "stop",
         };
-      } else {
+      }
+
+      // Identify which tool was just executed
+      const prevAssistantMsg = [...messages].reverse().find(
+        (m) => m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0
+      );
+      const lastToolName = prevAssistantMsg?.tool_calls?.[0]?.function?.name;
+
+      // Extract user context parameters for follow-up tool calls
+      const userMsg = [...messages].reverse().find((m) => m.role === "user");
+      const rawTask = userMsg?.content || "";
+      let payloadObj: any = undefined;
+      const payloadMatch = rawTask.match(/Context Payload:\s*(\{.*\})/s);
+      if (payloadMatch) {
+        try {
+          payloadObj = JSON.parse(payloadMatch[1]);
+        } catch (e) {}
+      }
+
+      const invoiceMatch = rawTask.match(/INV-[A-Za-z0-9-_]+/i) || rawTask.match(/(?:invoice|inv)\s+([A-Za-z0-9-_]+)/i);
+      const invoiceId = payloadObj?.invoiceId || (invoiceMatch ? (invoiceMatch[1] || invoiceMatch[0]) : "INV-DEFAULT-01");
+      const poMatch = rawTask.match(/PO-[A-Za-z0-9-_]+/i) || rawTask.match(/(?:purchase order|po)\s+([A-Za-z0-9-_]+)/i);
+      const poReference = payloadObj?.poReference || (poMatch ? (poMatch[1] || poMatch[0]) : "PO-2026-AWS-01");
+      const addrMatch =
+        rawTask.match(/claimed payout address\s+(0x[a-zA-Z0-9]+)/i) ||
+        rawTask.match(/payout address\s+(0x[a-zA-Z0-9]+)/i) ||
+        rawTask.match(/to recipient\s+(0x[a-zA-Z0-9]+)/i) ||
+        rawTask.match(/0x[a-fA-F0-9]{40,42}/) ||
+        rawTask.match(/0x[a-zA-Z0-9]{20,42}/);
+      const payoutAddress = payloadObj?.claimedPayoutAddress || payloadObj?.payoutAddress || payloadObj?.recipientAddress || (addrMatch ? (addrMatch[1] || addrMatch[0]) : "0x1111111111111111111111111111111111111111");
+
+      const amtMatch = rawTask.match(/(?:for|amount|sum of|\$)\s*(\d+(?:\.\d+)?)/i) || rawTask.match(/(\d+\.\d{6})/);
+      let amountUsdc = payloadObj?.amountUsdc ? String(payloadObj.amountUsdc) : (amtMatch ? amtMatch[1] : "12500.000000");
+      if (!amountUsdc.includes(".")) amountUsdc += ".000000";
+      else {
+        const parts = amountUsdc.split(".");
+        amountUsdc = `${parts[0]}.${parts[1].padEnd(6, "0").slice(0, 6)}`;
+      }
+
+      const accMatch = rawTask.match(/(?:account|acc|for)\s+([A-Z0-9_]+)/i) || rawTask.match(/OPEX_[A-Z]+|PAYROLL|CAPEX/i);
+      const accountId = payloadObj?.accountId || (accMatch ? (accMatch[1] || accMatch[0]) : "OPEX_DEV");
+      const liabilityMatch = rawTask.match(/liability\s+([A-Za-z0-9-_]+)/i) || rawTask.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      const liabilityId = payloadObj?.liabilityId || (liabilityMatch ? (liabilityMatch[1] || liabilityMatch[0]) : "LIA-DEFAULT-01");
+
+      // Multi-Step Chaining 1: After 3-Way Match -> Add/Stage Liability in Dynamic Record 1
+      if (lastToolName === "verify_three_way_match" && tools?.some((t) => t.function.name === "add_account_liability")) {
         return {
-          content: `Deliberation Conclusion: Operation verified and executed cleanly. Result: ${JSON.stringify(parsedResult.data || {})}. State recorded in continuous context.`,
-          finish_reason: "stop",
+          content: `Forensic 3-Way Match verified against PO ${poReference}. Staging verified liability into Dynamic Record 1 via 'add_account_liability'.`,
+          tool_calls: [
+            {
+              id: `call_${Date.now()}_add_liability`,
+              type: "function",
+              function: {
+                name: "add_account_liability",
+                arguments: JSON.stringify({
+                  accountId,
+                  vendorId: payloadObj?.vendorId || "vendor_default",
+                  title: payloadObj?.title || `Invoice ${invoiceId}`,
+                  amountUsdc,
+                  dueDate: payloadObj?.dueDate || new Date().toISOString(),
+                  category: payloadObj?.category || "SAAS",
+                  payoutAddress,
+                  poReference,
+                  invoiceId,
+                  proposedBy: "LiabilityRadarAgent",
+                  isVerifiedInvoice: true,
+                  autoStage: true,
+                  preferredPaymentRail: payloadObj?.preferredPaymentRail || "DISBURSAL_VAULT",
+                }),
+              },
+            },
+          ],
+          finish_reason: "tool_calls",
         };
       }
+
+      // Multi-Step Chaining 2: After Safe-to-Invest Recalculation -> Sweep surplus or Recall deficit
+      if (lastToolName === "recalculate_safe_to_invest") {
+        const safeToInvestUsdc = parsedResult.data?.safeToInvestUsdc ?? 0;
+        if (safeToInvestUsdc > 0 && tools?.some((t) => t.function.name === "sweep_excess_liquidity")) {
+          const issuedClearance = await ClearanceCodeRepo.issueCode({
+            accountId,
+            actionType: "AUTONOMOUS_SWEEP",
+            amountUsdc: safeToInvestUsdc.toFixed(6),
+            ttlSeconds: 3600,
+          });
+          return {
+            content: `Safe-to-Invest indicates surplus capital of ${safeToInvestUsdc} USDC. Executing autonomous sweep into USYC on Arc L1.`,
+            tool_calls: [
+              {
+                id: `call_${Date.now()}_sweep`,
+                type: "function",
+                function: {
+                  name: "sweep_excess_liquidity",
+                  arguments: JSON.stringify({
+                    accountId,
+                    amountUsdc: safeToInvestUsdc.toFixed(6),
+                    clearanceCode: issuedClearance.code,
+                  }),
+                },
+              },
+            ],
+            finish_reason: "tool_calls",
+          };
+        } else if (safeToInvestUsdc < 0 && tools?.some((t) => t.function.name === "recall_invested_liquidity")) {
+          return {
+            content: `Safe-to-Invest indicates deficit of ${Math.abs(safeToInvestUsdc)} USDC. Executing autonomous recall from USYC vault.`,
+            tool_calls: [
+              {
+                id: `call_${Date.now()}_recall`,
+                type: "function",
+                function: {
+                  name: "recall_invested_liquidity",
+                  arguments: JSON.stringify({
+                    accountId,
+                    amountUsdc: Math.abs(safeToInvestUsdc).toFixed(6),
+                    reason: "Dynamic Safe-to-Invest deficit restoration",
+                  }),
+                },
+              },
+            ],
+            finish_reason: "tool_calls",
+          };
+        }
+      }
+
+      // Multi-Step Chaining 3: After Disbursal Route Qualification -> Dispatch Payment (Fiat or Crypto) if payment requested
+      if (
+        (lastToolName === "qualify_disbursal_route" || lastToolName === "plan_waterfall_allocation") &&
+        (rawTask.toLowerCase().includes("disburse") || rawTask.toLowerCase().includes("pay") || rawTask.toLowerCase().includes("stage") || rawTask.toLowerCase().includes("settle") || rawTask.toLowerCase().includes("execute")) &&
+        !rawTask.toLowerCase().includes("run plan_waterfall_allocation tool")
+      ) {
+        const isFiat = payloadObj?.preferredPaymentRail === "FIAT_OFFRAMP" || rawTask.includes("fiat") || rawTask.includes("FIAT_OFFRAMP");
+        if (isFiat && tools?.some((t) => t.function.name === "convert_crypto_to_fiat_payout")) {
+          return {
+            content: `Disbursal route qualified. Preferred settlement rail is FIAT_OFFRAMP. Initiating Circle Mint conversion and Fedwire banking payout.`,
+            tool_calls: [
+              {
+                id: `call_${Date.now()}_fiat`,
+                type: "function",
+                function: {
+                  name: "convert_crypto_to_fiat_payout",
+                  arguments: JSON.stringify({
+                    sourceAccountId: accountId,
+                    amountUsdc,
+                    beneficiaryBank: {
+                      accountHolderName: payloadObj?.vendorId || "Corporate Landlord LLC",
+                      ibanOrAccountNumber: "US9876543210123456",
+                      routingOrSwift: "021000021",
+                      bankCountry: "US",
+                    },
+                    invoiceReference: invoiceId,
+                    complianceClearanceCode: `CLEAR-${Date.now()}-FIAT`,
+                  }),
+                },
+              },
+            ],
+            finish_reason: "tool_calls",
+          };
+        } else if (tools?.some((t) => t.function.name === "execute_disbursal_route")) {
+          return {
+            content: `Disbursal route qualified. Executing multi-account staged disbursal via DisbursalVault on Arc L1.`,
+            tool_calls: [
+              {
+                id: `call_${Date.now()}_disbursal_route`,
+                type: "function",
+                function: {
+                  name: "execute_disbursal_route",
+                  arguments: JSON.stringify({
+                    qualification: parsedResult.data,
+                    clearanceCode: `CLEAR-${Date.now()}-CRYPTO`,
+                  }),
+                },
+              },
+            ],
+            finish_reason: "tool_calls",
+          };
+        }
+      }
+
+      // Multi-Step Chaining 4: After Payment Execution -> General Ledger Witnessing
+      if (
+        (lastToolName === "convert_crypto_to_fiat_payout" ||
+          lastToolName === "execute_disbursal_route" ||
+          lastToolName === "execute_disbursal") &&
+        tools?.some((t) => t.function.name === "post_document_linked_gl")
+      ) {
+        const txHash =
+          parsedResult.data?.transactionHash ||
+          parsedResult.data?.payoutTxHash ||
+          parsedResult.data?.txHash;
+
+        if (typeof txHash !== "string" || !/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
+          return {
+            content: "The payment result has no verifiable Arc transaction hash, so ledger witnessing is blocked.",
+            finish_reason: "stop",
+          };
+        }
+
+        return {
+          content: `Payment successfully dispatched. Witnessing settlement into General Ledger with sequential cryptographic hash chain.`,
+          tool_calls: [
+            {
+              id: `call_${Date.now()}_post_gl`,
+              type: "function",
+              function: {
+                name: "post_document_linked_gl",
+                arguments: JSON.stringify({
+                  accountId,
+                  documentRef: invoiceId,
+                  debitAccount: "2100_ACCOUNTS_PAYABLE",
+                  creditAccount: "1010_ARC_OPERATING_POOL",
+                  amountUsdc,
+                  txHash,
+                }),
+              },
+            },
+          ],
+          finish_reason: "tool_calls",
+        };
+      }
+
+      // Default conclusion after tool sequence
+      return {
+        content: `Deliberation Conclusion: Operation verified and executed cleanly. Result: ${JSON.stringify(parsedResult.data || {})}. State recorded in continuous context.`,
+        finish_reason: "stop",
+      };
     }
 
     // Dynamic Parameter Extraction from Conversation Task Text
@@ -220,7 +444,7 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
     const payoutAddress = payloadObj?.claimedPayoutAddress || payloadObj?.recipientAddress || (addrMatch ? (addrMatch[1] || addrMatch[0]) : "0x1111111111111111111111111111111111111111");
 
     const amtMatch = rawTask.match(/(?:for|amount|sum of|\$)\s*(\d+(?:\.\d+)?)/i) || rawTask.match(/(\d+\.\d{6})/);
-    let amountUsdc = payloadObj?.amountUsdc ? payloadObj.amountUsdc : (amtMatch ? amtMatch[1] : "12500.000000");
+    let amountUsdc = payloadObj?.amountUsdc !== undefined ? String(payloadObj.amountUsdc) : (amtMatch ? amtMatch[1] : "12500.000000");
     if (!amountUsdc.includes(".")) amountUsdc += ".000000";
     else {
       const parts = amountUsdc.split(".");
@@ -320,6 +544,13 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
       tools?.some((t) => t.function.name === "sweep_excess_liquidity") &&
       content.includes("sweep")
     ) {
+      const sweepAmt = payloadObj?.customAmount || amountUsdc || "10.000000";
+      const sweepCode = payloadObj?.clearanceCode || (await ClearanceCodeRepo.issueCode({
+        accountId,
+        actionType: "AUTONOMOUS_SWEEP",
+        amountUsdc: sweepAmt,
+        ttlSeconds: 3600,
+      })).code;
       return {
         content: `Executing autonomous sweep of ${amountUsdc} USDC into USYC Yield Vault for account ${accountId}.`,
         tool_calls: [
@@ -330,8 +561,8 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
               name: "sweep_excess_liquidity",
               arguments: JSON.stringify({
                 accountId,
-                amountUsdc: payloadObj?.customAmount || amountUsdc,
-                clearanceCode: payloadObj?.clearanceCode || "CLEAR-SWEEP-AUTO-01",
+                amountUsdc: sweepAmt,
+                clearanceCode: sweepCode,
               }),
             },
           },
@@ -421,8 +652,8 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
       tools?.some((t) => t.function.name === "post_document_linked_gl") &&
       (content.includes("witness") || content.includes("journal") || content.includes("ledger") || content.includes("voucher"))
     ) {
-      const txMatch = rawTask.match(/0x[a-zA-Z0-9_]{10,66}/);
-      const txHash = txMatch ? txMatch[0] : "0xarc_settlement_receipt";
+      const txMatch = rawTask.match(/0x[a-zA-Z0-9_-]+/);
+      const txHash = txMatch ? txMatch[0] : "0x" + "0".repeat(64);
       return {
         content: `Posting document-linked GL entry to ERP and appending to sequential master journal with cryptographic SHA-256 hash chain.`,
         tool_calls: [

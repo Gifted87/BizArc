@@ -209,4 +209,314 @@ CREATE TABLE IF NOT EXISTS erp_sync_state (
 CREATE INDEX IF NOT EXISTS idx_erp_sync_system ON erp_sync_state(system_type, entity_type);
 CREATE INDEX IF NOT EXISTS idx_erp_sync_account ON erp_sync_state(account_id);
 
+-- ======================================================================================
+-- 12. Enterprise Company Profiles (Ingested & Connected App Profile)
+-- Stores synthesized company profiles, connected ERP & MCP apps, and inferred policies
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS company_profiles (
+    company_id VARCHAR(64) PRIMARY KEY,
+    company_name VARCHAR(255) NOT NULL,
+    business_description TEXT,
+    connected_apps JSONB NOT NULL DEFAULT '[]'::jsonb,
+    discovered_cost_centers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    inferred_policies JSONB NOT NULL DEFAULT '{}'::jsonb,
+    activation_status VARCHAR(32) NOT NULL DEFAULT 'PENDING_ACTIVATION',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_profiles_name ON company_profiles(company_name);
+
+-- ======================================================================================
+-- 13. Movement Policies (Cross-Account Waterfall & Liquidity Routing)
+-- Enforces priority ordering, cost-center boundaries, and protected accounts
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS movement_policies (
+    policy_id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(128) NOT NULL,
+    priority_order JSONB NOT NULL DEFAULT '[]'::jsonb,
+    protected_accounts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    cross_account_borrowing_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    max_borrowing_ratio NUMERIC(5, 2) NOT NULL DEFAULT 0.50,
+    human_approval_threshold_usdc NUMERIC(18, 6) NOT NULL DEFAULT 1000.000000,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ======================================================================================
+-- 14. Recurring Liability Change Proposals (Human & Agent Lifecycle)
+-- Manages addition, modification, and cancellation of recurring commitments with Human Gate
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS recurring_liability_proposals (
+    proposal_id VARCHAR(64) PRIMARY KEY,
+    action_type VARCHAR(32) NOT NULL, -- 'ADD', 'EDIT', 'REMOVE'
+    liability_id UUID,
+    account_id VARCHAR(64) REFERENCES treasury_accounts(account_id) ON DELETE CASCADE,
+    vendor_id VARCHAR(64) NOT NULL,
+    proposed_by VARCHAR(64) NOT NULL, -- 'HUMAN' or agent persona
+    details JSONB NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING_HUMAN_APPROVAL', -- 'PENDING_HUMAN_APPROVAL', 'APPROVED', 'REJECTED'
+    sprs_request_id VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON recurring_liability_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_proposals_account ON recurring_liability_proposals(account_id);
+
+-- ======================================================================================
+-- 15. Session Key Registry (ERC-4337 / ERC-6900 Modular Accounts)
+-- Persistent policy scopes, spending caps, and valid time horizons for session keys
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS session_key_registry (
+    session_key_id VARCHAR(64) PRIMARY KEY,
+    account_id VARCHAR(64) REFERENCES treasury_accounts(account_id) ON DELETE CASCADE,
+    allowed_recipient VARCHAR(42) NOT NULL,
+    max_amount_per_cycle_usdc NUMERIC(18, 6) NOT NULL,
+    cycle_duration_seconds INT NOT NULL,
+    current_cycle_spent_usdc NUMERIC(18, 6) NOT NULL DEFAULT 0.000000,
+    valid_until_timestamp BIGINT NOT NULL,
+    last_executed_timestamp BIGINT,
+    public_key_hex TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_keys_account ON session_key_registry(account_id);
+CREATE INDEX IF NOT EXISTS idx_session_keys_recipient ON session_key_registry(allowed_recipient);
+
+-- ======================================================================================
+-- 16. ERC-3009 Authorizations Registry (Native Arc USDC Gasless Signed Mandates)
+-- Persistent nonces and execution state for receiveWithAuthorization replay defense
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS erc3009_authorizations (
+    nonce VARCHAR(66) PRIMARY KEY,
+    from_address VARCHAR(42) NOT NULL,
+    to_address VARCHAR(42) NOT NULL,
+    amount_raw NUMERIC(30, 0) NOT NULL,
+    valid_after BIGINT NOT NULL,
+    valid_before BIGINT NOT NULL,
+    intent_id VARCHAR(100),
+    tx_hash VARCHAR(66),
+    executed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_erc3009_from ON erc3009_authorizations(from_address);
+CREATE INDEX IF NOT EXISTS idx_erc3009_to ON erc3009_authorizations(to_address);
+
+-- ======================================================================================
+-- 17. Onboarding Wizard Sessions Table
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS onboarding_wizard_sessions (
+    session_id VARCHAR(64) PRIMARY KEY,
+    company_id VARCHAR(64) NOT NULL,
+    current_step INT NOT NULL DEFAULT 1,
+    total_steps INT NOT NULL DEFAULT 6,
+    entry_path VARCHAR(32) NOT NULL, -- 'MANUAL', 'GOOGLE_WORKSPACE', 'MICROSOFT_365', 'ODOO', 'ERPNEXT'
+    draft_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    completed_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status VARCHAR(32) NOT NULL DEFAULT 'IN_PROGRESS', -- 'IN_PROGRESS', 'DRAFT_READY', 'COMPLETED', 'ABANDONED'
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wizard_company ON onboarding_wizard_sessions(company_id);
+CREATE INDEX IF NOT EXISTS idx_wizard_status ON onboarding_wizard_sessions(status);
+
+-- ======================================================================================
+-- 18. Mathematical Rules Q&A Responses Audit Ledger
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS math_rules_qa_responses (
+    response_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id VARCHAR(64) NOT NULL,
+    account_id VARCHAR(64), -- NULL for general company-wide rules
+    liability_id UUID,     -- NULL for non-liability rules
+    category VARCHAR(32) NOT NULL, -- 'GENERAL_MATH', 'ACCOUNT_MATH', 'LIABILITY_MATH', 'INVESTMENT_MATH'
+    question_id VARCHAR(64) NOT NULL,
+    question_text TEXT NOT NULL,
+    user_answer TEXT NOT NULL,
+    derived_parameter_name VARCHAR(64) NOT NULL,
+    derived_value NUMERIC(18, 6) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_qa_company ON math_rules_qa_responses(company_id);
+CREATE INDEX IF NOT EXISTS idx_qa_category ON math_rules_qa_responses(category);
+
+-- ======================================================================================
+-- 19. Tenant OAuth Credentials Store (Production MCP & Integrations)
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS tenant_oauth_tokens (
+    token_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id VARCHAR(64) NOT NULL,
+    provider VARCHAR(32) NOT NULL, -- 'GOOGLE_WORKSPACE', 'MICROSOFT_365', 'ODOO_SESSION', 'ERPNEXT_KEY'
+    access_token_encrypted TEXT NOT NULL,
+    refresh_token_encrypted TEXT,
+    token_scope TEXT,
+    expires_at TIMESTAMPTZ,
+    session_metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uq_company_provider UNIQUE (company_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_company ON tenant_oauth_tokens(company_id);
+
+-- ======================================================================================
+-- 20. Multi-Tenant Schema Column Extensions
+-- ======================================================================================
+ALTER TABLE treasury_accounts
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org',
+    ADD COLUMN IF NOT EXISTS per_tx_cap_usdc NUMERIC(18, 6) DEFAULT 500.000000,
+    ADD COLUMN IF NOT EXISTS daily_cap_usdc NUMERIC(18, 6) DEFAULT 5000.000000,
+    ADD COLUMN IF NOT EXISTS weekly_cap_usdc NUMERIC(18, 6) DEFAULT 25000.000000,
+    ADD COLUMN IF NOT EXISTS monthly_cap_usdc NUMERIC(18, 6) DEFAULT 100000.000000,
+    ADD COLUMN IF NOT EXISTS authorized_categories JSONB DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS max_autonomous_sweep_usdc NUMERIC(18, 6) DEFAULT 1000.000000,
+    ADD COLUMN IF NOT EXISTS exclude_from_waterfall BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS account_declared_policies JSONB DEFAULT '{}'::jsonb;
+
+CREATE INDEX IF NOT EXISTS idx_accounts_company ON treasury_accounts(company_id);
+
+ALTER TABLE account_liabilities
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org',
+    ADD COLUMN IF NOT EXISTS preferred_payment_rail VARCHAR(32) NOT NULL DEFAULT 'DISBURSAL_VAULT',
+    ADD COLUMN IF NOT EXISTS payment_rail_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS disbursal_rules JSONB NOT NULL DEFAULT '{"autoPayThresholdUsdc": 500, "requireThreeWayMatch": true, "preFlightLeadTimeHours": 48}'::jsonb,
+    ADD COLUMN IF NOT EXISTS waterfall_override JSONB DEFAULT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_liabilities_company ON account_liabilities(company_id);
+CREATE INDEX IF NOT EXISTS idx_liabilities_rail ON account_liabilities(preferred_payment_rail);
+
+ALTER TABLE movement_policies
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+
+CREATE INDEX IF NOT EXISTS idx_movement_company ON movement_policies(company_id);
+
+ALTER TABLE master_system_journal
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+
+CREATE INDEX IF NOT EXISTS idx_journal_company ON master_system_journal(company_id);
+
+-- 20. External App Polling & Autonomous Scheduler Jobs
+CREATE TABLE IF NOT EXISTS external_app_polling_jobs (
+    job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id VARCHAR(64) NOT NULL,
+    app_type VARCHAR(64) NOT NULL,
+    polling_frequency_cron VARCHAR(64) DEFAULT '0 */6 * * *',
+    interval_seconds INTEGER DEFAULT 21600,
+    last_polled_at TIMESTAMP WITH TIME ZONE,
+    next_poll_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    status VARCHAR(32) DEFAULT 'IDLE',
+    last_discovered_count INTEGER DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(company_id, app_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_polling_jobs_due ON external_app_polling_jobs(next_poll_at, status);
+CREATE INDEX IF NOT EXISTS idx_polling_jobs_company ON external_app_polling_jobs(company_id);
+
+-- 21. Enforcer Compliance Clearance Codes (Single-Use, Bound to Action, Account, Amount & Expiry)
+CREATE TABLE IF NOT EXISTS compliance_clearance_codes (
+    code VARCHAR(64) PRIMARY KEY,
+    account_id VARCHAR(64) NOT NULL,
+    action_type VARCHAR(64) NOT NULL,
+    amount_usdc NUMERIC(18, 6) NOT NULL,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    is_consumed BOOLEAN NOT NULL DEFAULT FALSE,
+    consumed_at TIMESTAMPTZ,
+    recipient_address VARCHAR(42)
+);
+
+CREATE INDEX IF NOT EXISTS idx_clearance_code_status ON compliance_clearance_codes(is_consumed, expires_at);
+CREATE INDEX IF NOT EXISTS idx_clearance_code_account ON compliance_clearance_codes(account_id);
+
+-- ======================================================================================
+-- 22. Vendor Bank Accounts Registry (Payee Substitution Defense & Traditional Offramps)
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS vendor_bank_accounts (
+    bank_account_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    vendor_id VARCHAR(64) NOT NULL,
+    account_holder_name VARCHAR(255) NOT NULL,
+    iban_account_number VARCHAR(128) NOT NULL,
+    routing_swift VARCHAR(64) NOT NULL,
+    bank_name VARCHAR(128),
+    bank_country VARCHAR(8) NOT NULL DEFAULT 'US',
+    is_verified BOOLEAN NOT NULL DEFAULT TRUE,
+    verified_by_admin VARCHAR(64) DEFAULT 'SYSTEM',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uq_vendor_bank UNIQUE (vendor_id, iban_account_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vendor_bank_vendor ON vendor_bank_accounts(vendor_id);
+
+-- ======================================================================================
+-- 23. Fiat Payout Records (Circle Mint / Fedwire / ACH Traditional Banking Disbursals)
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS fiat_payout_records (
+    payout_id VARCHAR(64) PRIMARY KEY,
+    account_id VARCHAR(64) NOT NULL,
+    vendor_id VARCHAR(64) NOT NULL,
+    amount_usdc NUMERIC(18, 6) NOT NULL,
+    fee_usdc NUMERIC(18, 6) NOT NULL DEFAULT 0.000000,
+    status VARCHAR(32) NOT NULL DEFAULT 'INITIATED', -- 'INITIATED', 'PROCESSING', 'SETTLED', 'FAILED', 'ESCALATED'
+    beneficiary_bank_id UUID REFERENCES vendor_bank_accounts(bank_account_id) ON DELETE SET NULL,
+    circle_payout_ref VARCHAR(128),
+    burn_tx_hash VARCHAR(66),
+    sprs_request_id VARCHAR(100),
+    invoice_ref VARCHAR(255),
+    estimated_arrival TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    settled_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_fiat_payout_account ON fiat_payout_records(account_id);
+CREATE INDEX IF NOT EXISTS idx_fiat_payout_vendor ON fiat_payout_records(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_fiat_payout_status ON fiat_payout_records(status);
+
+-- ======================================================================================
+-- 24. Token Swap Records (Circle Swap Kit / Viem Multi-Chain FX Conversions)
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS token_swap_records (
+    swap_id VARCHAR(64) PRIMARY KEY,
+    account_id VARCHAR(64) NOT NULL,
+    from_chain VARCHAR(32) NOT NULL,
+    from_token VARCHAR(64) NOT NULL,
+    to_chain VARCHAR(32) NOT NULL,
+    to_token VARCHAR(64) NOT NULL,
+    from_amount NUMERIC(18, 6) NOT NULL,
+    to_amount NUMERIC(18, 6) NOT NULL,
+    realized_rate NUMERIC(18, 8) NOT NULL,
+    slippage_bps INTEGER NOT NULL DEFAULT 50,
+    tx_hash VARCHAR(66),
+    status VARCHAR(32) NOT NULL DEFAULT 'COMPLETED', -- 'COMPLETED', 'PENDING', 'REJECTED_BY_POLICY', 'FAILED'
+    route_aggregator VARCHAR(64) DEFAULT 'LiFi',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_token_swap_account ON token_swap_records(account_id);
+
+-- ======================================================================================
+-- 25. Fiat Deposit Sessions (Cards/ACH Onramp & Institutional Wire Funding Tracking)
+-- ======================================================================================
+CREATE TABLE IF NOT EXISTS fiat_deposit_sessions (
+    session_id VARCHAR(64) PRIMARY KEY,
+    account_id VARCHAR(64) NOT NULL,
+    method VARCHAR(32) NOT NULL, -- 'CARD_ONRAMP', 'FEDWIRE', 'ACH', 'SWIFT'
+    amount_usdc NUMERIC(18, 6) NOT NULL,
+    tracking_memo VARCHAR(128) NOT NULL,
+    checkout_url TEXT,
+    cli_command TEXT,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'CONFIRMED', 'EXPIRED'
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    confirmed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_fiat_deposit_account ON fiat_deposit_sessions(account_id);
+CREATE INDEX IF NOT EXISTS idx_fiat_deposit_memo ON fiat_deposit_sessions(tracking_memo);
 

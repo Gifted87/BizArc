@@ -7,24 +7,55 @@ export class TreasurySentinelLlmAgent extends BaseLlmAgent {
       agentName: "TreasurySentinelAgent",
       systemInstruction: `You are the TreasurySentinelAgent (ID #101) in the BizArc Autonomous Treasury Swarm.
 Your primary mandate is liquidity orchestration and capital efficiency:
-1. Maintain continuous vigilance over the Parallel Tripartite Balance:
-   - Liquid Cash in operating pools.
-   - Invested Yield in ERC-4626 USYC vaults on Arc L1.
-   - Available Balance (Liquid + Invested).
-2. Continuously recalculate Dynamic Safe-to-Invest (Record 2).
-3. If Safe-to-Invest > 0, submit reason-bearing intent to PolicyComplianceAgent (#104) to receive a PERMIT clearance code, then trigger sweep of idle USDC into tokenized US Treasury yield vault (TreasuryVault).
-4. If scheduled liabilities within the time horizon exceed liquid reserves (RECALL_REQUIRED), submit reason-bearing intent to PolicyComplianceAgent (#104) and trigger emergency recall of USYC shares back to liquid operating pool.
-5. All operations must strictly enforce exact 6-decimal math, respect clearance codes, and maintain corporate reserve floors.`,
+1. Process Flow & Tool Triggers:
+   - Use 'get_unified_operational_state' to maintain vigilance over the 8-dimensional operational state and verify the Tripartite Invariant (BE = BL + BY).
+   - Use 'get_yield_performance_metrics' to inspect cumulative historical yield accrual, deposits, withdrawals, and current APR.
+   - Continuously recalculate Dynamic Safe-to-Invest via 'recalculate_safe_to_invest' (Record 2).
+   - If non-USDC funds are received or held, use 'estimate_token_swap' and 'execute_token_swap' to convert them into Arc USDC before rebalancing.
+   - For fiat funding, invoke 'create_fiat_onramp_session' for cards/ACH on-ramping or 'get_fiat_wire_deposit_instructions' for BNY Mellon / Circle Mint Fedwire deposits, and 'record_fiat_deposit' once confirmed.
+   - If Safe-to-Invest indicates surplus capital (> 0): formulate reason-bearing intent, submit to PolicyComplianceAgent (#104) via 'evaluate_reason_bearing_intent' for a PERMIT clearance code, then execute 'sweep_excess_liquidity' into the tokenized US Treasury yield vault on Arc L1.
+   - If scheduled liabilities within the time horizon exceed liquid reserves (RECALL_REQUIRED): submit reason-bearing intent to PolicyComplianceAgent (#104) and execute 'recall_invested_liquidity' or 'execute_predictive_recall' back to operating pools.
+2. Guardrails:
+   - All operations must strictly enforce exact 6-decimal math, respect clearance codes, and maintain corporate reserve floors.`,
       allowedTools: [
         "read_dynamic_records",
         "recalculate_safe_to_invest",
         "evaluate_reason_bearing_intent",
         "sweep_excess_liquidity",
         "recall_invested_liquidity",
+        "scan_predictive_liabilities",
+        "execute_predictive_recall",
         "query_vector_memory",
+        "get_unified_operational_state",
+        "get_yield_performance_metrics",
+        "transfer_account_liquidity",
+        "get_account_intelligence",
+        "estimate_token_swap",
+        "execute_token_swap",
+        "create_fiat_onramp_session",
+        "get_fiat_wire_deposit_instructions",
+        "record_fiat_deposit",
       ],
       ...deps,
     });
+  }
+
+  /**
+   * Autonomous LLM Dynamic Yield Rebalancing & Liquidity Management.
+   * Runs the full ReAct cognitive loop: scans Dynamic Records, evaluates Safe-to-Invest,
+   * checks policy clearance, and executes sweep/recall/internal transfer tools.
+   */
+  public async rebalanceAccountLiquidity(
+    sessionId: string,
+    event: {
+      accountId: string;
+      amountUsdc: number;
+      currentLiquidBalanceUsdc: number;
+      origin: string;
+    }
+  ) {
+    const task = `Evaluate Parallel Tripartite Balance ($B_E = B_L + B_Y$) and recalculate Dynamic Safe-to-Invest (Record 2) for account ${event.accountId} following balance mutation event from ${event.origin} (${event.amountUsdc} USDC). Assess upcoming liabilities and reserve floors according to defined investment rules. If Safe-to-Invest indicates surplus capital, formulate reason-bearing intent, obtain clearance code from PolicyComplianceAgent (#104), and execute tool 'sweep_excess_liquidity' to USYC Yield Vault on Arc L1. If deficit exists, formulate intent and execute tool 'recall_invested_liquidity'. If intra-account rebalancing is required, invoke 'transfer_account_liquidity'.`;
+    return this.executeTask(sessionId, task, event);
   }
 
   /**

@@ -177,10 +177,26 @@ export class DynamicRecordsService {
   ): Promise<DynamicSafeToInvestRecord> {
     const tripartite = await this.getTripartiteBalance(accountId, liveLiquidRaw, liveInvestedRaw);
 
-    // Target Reserve default
-    const targetReserveRaw = customTargetReserveUsdc
-      ? this.parseUsdcToRaw(customTargetReserveUsdc)
-      : 20000000000n; // Default $20,000.000000 reserve
+    // Target Reserve: dynamically look up account operating floor from treasury_accounts
+    let targetReserveRaw: bigint;
+    if (customTargetReserveUsdc) {
+      targetReserveRaw = this.parseUsdcToRaw(customTargetReserveUsdc);
+    } else {
+      try {
+        const accRes = await DbClient.query(
+          `SELECT min_operating_floor_usdc FROM treasury_accounts WHERE account_id = $1 LIMIT 1;`,
+          [accountId]
+        );
+        if (accRes.rows.length > 0 && accRes.rows[0].min_operating_floor_usdc != null) {
+          const floor = parseFloat(accRes.rows[0].min_operating_floor_usdc);
+          targetReserveRaw = this.parseUsdcToRaw(floor.toFixed(6));
+        } else {
+          targetReserveRaw = 50000000n; // Default $50.000000 reserve
+        }
+      } catch {
+        targetReserveRaw = 50000000n;
+      }
+    }
 
     // Sum upcoming liabilities within horizon
     const horizonEndDate = new Date(Date.now() + timeHorizonSeconds * 1000);

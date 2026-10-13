@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { PublicClient, WalletClient } from "viem";
 import { PolicyLoader } from "../config/policyLoader.js";
 import { TreasuryAccountsRepo, TreasuryAccountRecord } from "../database/repos/treasuryAccountsRepo.js";
@@ -65,7 +66,7 @@ export class AccountRegistrationService {
         customWallets[acc.account_id] ||
         (process.env[`WALLET_${acc.account_id.toUpperCase()}`] as `0x${string}`) ||
         DEFAULT_PRODUCTION_ACCOUNT_WALLETS[acc.account_id] ||
-        `0x${acc.account_id.padEnd(40, "0").slice(0, 40)}`;
+        (`0x${crypto.createHash("sha256").update(acc.account_id).digest("hex").slice(0, 40)}` as `0x${string}`);
 
       const record = await TreasuryAccountsRepo.upsertAccount({
         account_id: acc.account_id,

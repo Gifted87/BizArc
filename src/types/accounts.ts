@@ -13,12 +13,17 @@ export type LiabilityCategory =
   | "PAYROLL"
   | "MILESTONE"
   | "INFRASTRUCTURE"
-  | "CONTRACTOR";
+  | "DEVELOPER_TOOLS"
+  | "CONTRACTOR"
+  | "SAAS"
+  | "MARKETING"
+  | "GENERAL_OPERATIONS";
 
 export type LiabilityStatus =
   | "SCHEDULED"
   | "AWAITING_APPROVAL"
   | "DISBURSED"
+  | "SETTLED"
   | "CANCELLED"
   | "FROZEN"
   | "UNMATCHED_DISPUTED";

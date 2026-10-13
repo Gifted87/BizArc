@@ -5,6 +5,7 @@ export const GENESIS_PREVIOUS_HASH = "0".repeat(64);
 
 export interface MasterJournalRecord {
   sequence_id?: string;
+  company_id?: string;
   timestamp?: Date;
   account_id: string;
   action_type: string;
@@ -18,6 +19,7 @@ export interface MasterJournalRecord {
 
 export interface AppendJournalInput {
   account_id: string;
+  company_id?: string;
   action_type: string;
   debit_account: string;
   credit_account: string;
@@ -60,7 +62,18 @@ export class MasterJournalRepo {
   public static async appendEntry(
     input: AppendJournalInput
   ): Promise<MasterJournalRecord> {
-    if (input.amount_usdc <= 0) {
+    const nonFinancialActionTypes = [
+      "GENESIS_ONBOARDING",
+      "INTAKE_DISCOVERY_SYNTHESIZED",
+      "PRODUCTION_PROFILE_ACTIVATED",
+      "YIELD_VAULT_CONTRACT_MIGRATED",
+      "EMERGENCY_SHUTDOWN_ENGAGED",
+      "CIRCUIT_BREAKER_DISARMED",
+    ];
+    if (!nonFinancialActionTypes.includes(input.action_type) && input.amount_usdc <= 0) {
+      throw new Error(`MasterJournal: amount_usdc must be positive, got ${input.amount_usdc}`);
+    }
+    if (input.amount_usdc < 0) {
       throw new Error(`MasterJournal: amount_usdc must be positive, got ${input.amount_usdc}`);
     }
     if (!input.document_ref || input.document_ref.trim() === "") {
@@ -97,14 +110,15 @@ export class MasterJournalRepo {
 
       const insertText = `
         INSERT INTO master_system_journal (
-          timestamp, account_id, action_type, debit_account,
+          timestamp, account_id, company_id, action_type, debit_account,
           credit_account, amount_usdc, document_ref, previous_hash, current_hash
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *;
       `;
       const insertValues = [
         now,
         input.account_id,
+        input.company_id || "default_org",
         input.action_type,
         input.debit_account,
         input.credit_account,
@@ -139,12 +153,35 @@ export class MasterJournalRepo {
     limit = 100
   ): Promise<MasterJournalRecord[]> {
     const text = `
-      SELECT * FROM master_system_journal
-      WHERE account_id = $1
-      ORDER BY sequence_id ASC
-      LIMIT $2;
+      SELECT * FROM (
+        SELECT * FROM master_system_journal
+        WHERE account_id = $1
+        ORDER BY sequence_id DESC
+        LIMIT $2
+      ) sub
+      ORDER BY sequence_id ASC;
     `;
     const res = await DbClient.query<MasterJournalRecord>(text, [accountId, limit]);
+    return res.rows.map((row) => ({
+      ...row,
+      amount_usdc: Number(row.amount_usdc),
+    }));
+  }
+
+  public static async getEntriesByCompany(
+    companyId: string,
+    limit = 100
+  ): Promise<MasterJournalRecord[]> {
+    const text = `
+      SELECT * FROM (
+        SELECT * FROM master_system_journal
+        WHERE company_id = $1
+        ORDER BY sequence_id DESC
+        LIMIT $2
+      ) sub
+      ORDER BY sequence_id ASC;
+    `;
+    const res = await DbClient.query<MasterJournalRecord>(text, [companyId, limit]);
     return res.rows.map((row) => ({
       ...row,
       amount_usdc: Number(row.amount_usdc),

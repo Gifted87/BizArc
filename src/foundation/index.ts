@@ -4,6 +4,7 @@ export * from "./usdc/usdcAbi.js";
 export * from "./usdc/usdcService.js";
 export * from "./wallets/types.js";
 export * from "./wallets/viemWalletAdapter.js";
+export * from "./wallets/arcTransactionExecutor.js";
 export * from "./wallets/circleWalletService.js";
 export * from "./events/lockManager.js";
 export * from "./events/debounceEngine.js";

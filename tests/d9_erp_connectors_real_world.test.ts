@@ -1,7 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { ErpNextConnector } from "../src/connectors/erpNextConnector.js";
-import { OdooConnector } from "../src/connectors/odooConnector.js";
+import { ErpNextConnector, IErpNextTransport } from "../src/connectors/erpNextConnector.js";
+import { OdooConnector, IOdooTransport } from "../src/connectors/odooConnector.js";
 import { ErpSyncRepo } from "../src/database/repos/erpSyncRepo.js";
 import { EnterpriseOnboardingService } from "../src/services/enterpriseOnboardingService.js";
 import { LiabilityRadarService } from "../src/services/liabilityRadarService.js";
@@ -11,9 +11,108 @@ import { TreasuryAccountsRepo } from "../src/database/repos/treasuryAccountsRepo
 import { DbClient } from "../src/database/dbClient.js";
 import { LoudRoundingError } from "../src/foundation/usdc/usdcService.js";
 
+const testErpNextTransport: IErpNextTransport = {
+  async get<T>(path: string, params?: Record<string, any>): Promise<T> {
+    if (path === "/api/resource/Purchase Order") {
+      return [
+        {
+          name: "PO-2026-AWS-01",
+          supplier: "vnd_aws",
+          grand_total: 12500.0,
+          currency: "USD",
+          status: "To Receive and Bill",
+          items: [{ item_code: "AWS-CLOUD-SRV", qty: 1, rate: 12500.0, amount: 12500.0 }],
+        },
+      ] as any;
+    }
+    if (path === "/api/resource/Purchase Receipt") {
+      return [
+        {
+          name: "GRN-2026-AWS-01",
+          purchase_order: params?.poNumber || "PO-2026-AWS-01",
+          supplier: "vnd_aws",
+          status: "Completed",
+          items: [{ item_code: "AWS-CLOUD-SRV", qty: 1, received_qty: 1 }],
+        },
+      ] as any;
+    }
+    if (path === "/api/resource/Purchase Invoice") {
+      return [
+        {
+          name: "PINV-2026-AWS-01",
+          supplier: "vnd_aws",
+          grand_total: 12500.0,
+          outstanding_amount: 12500.0,
+          due_date: new Date(Date.now() + 86400000 * 5).toISOString(),
+          status: "Unpaid",
+          items: [{ item_code: "AWS-CLOUD-SRV", qty: 1, rate: 12500.0, amount: 12500.0 }],
+        },
+      ] as any;
+    }
+    return [] as any;
+  },
+  async post<T>(path: string, body: any): Promise<T> {
+    return { success: true, docName: "PE-2026-AWS-01" } as any;
+  },
+};
+
+const testOdooTransport: IOdooTransport = {
+  async callJsonRpc<T>(service: string, method: string, args: any[]): Promise<T> {
+    if (service === "common" && method === "authenticate") {
+      return 1 as any;
+    }
+    if (service === "object" && method === "execute_kw") {
+      const model = args[3];
+      const modelMethod = args[4];
+      if (model === "purchase.order" && modelMethod === "search_read") {
+        return [
+          {
+            id: 101,
+            name: "PO-2026-AWS-01",
+            partner_id: [42, "AWS EMEA"],
+            amount_total: 12500.0,
+            state: "purchase",
+            order_line: [1001],
+          },
+        ] as any;
+      }
+      if (model === "stock.picking" && modelMethod === "search_read") {
+        return [
+          {
+            id: 501,
+            name: "GRN-2026-AWS-01",
+            origin: "PO-2026-AWS-01",
+            state: "done",
+            date_done: new Date().toISOString(),
+          },
+        ] as any;
+      }
+      if (model === "account.move" && modelMethod === "search_read") {
+        return [
+          {
+            id: 901,
+            name: "BILL/2026/05/0001",
+            partner_id: [42, "AWS EMEA"],
+            move_type: "in_invoice",
+            amount_total: 12500.0,
+            amount_residual: 12500.0,
+            invoice_date_due: new Date(Date.now() + 86400000 * 5).toISOString(),
+            payment_state: "not_paid",
+            invoice_line_ids: [2001],
+          },
+        ] as any;
+      }
+      if (model === "account.payment.register" && modelMethod === "create") {
+        return 777 as any;
+      }
+    }
+    return {} as any;
+  },
+};
+
 describe("D6-D9 Real-World ERP Connectors & Enterprise Onboarding Audit", () => {
-  const erpNext = new ErpNextConnector();
-  const odoo = new OdooConnector();
+  const erpNext = new ErpNextConnector(undefined, testErpNextTransport);
+  const odoo = new OdooConnector(undefined, testOdooTransport);
   const onboarding = new EnterpriseOnboardingService();
   const radar = new LiabilityRadarService();
 

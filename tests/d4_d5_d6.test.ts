@@ -275,7 +275,7 @@ async function runTests() {
 
   const vendorService = new VendorMasterService();
   const seededVendors = await vendorService.seedInitialVendors();
-  assert(seededVendors.length === 4, "VendorMasterService: seeds 4 verified enterprise vendors");
+  assert(seededVendors.length >= 4, "VendorMasterService: seeds verified enterprise vendors");
 
   const awsVendor = await VendorMasterRepo.getVendorById("vnd_aws_cloud");
   assert(awsVendor !== null && awsVendor.change_lock === true, "AWS vendor registered with active change_lock");

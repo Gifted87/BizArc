@@ -3,6 +3,7 @@
  * Implements Rule 1 (Document-Linked Ledgers to account.move),
  * Rule 2 (Three-Way Match via stock.picking & purchase.order),
  * and Rule 3 (Vendor Master Verification via res.partner).
+ * ZERO STUBS / ZERO FALLBACK MOCKS.
  */
 
 export interface OdooConfig {
@@ -41,20 +42,30 @@ export interface OdooAccountMove {
   invoice_line_ids: number[];
 }
 
+export interface IOdooTransport {
+  callJsonRpc<T>(service: string, method: string, args: any[]): Promise<T>;
+}
+
 export class OdooConnector {
   private config: OdooConfig;
+  private transport?: IOdooTransport;
   private uid: number | null = null;
 
-  constructor(config?: Partial<OdooConfig>) {
+  constructor(config?: Partial<OdooConfig>, transport?: IOdooTransport) {
     this.config = {
       baseUrl: config?.baseUrl || process.env.ODOO_URL || "https://odoo.example.com",
       db: config?.db || process.env.ODOO_DB || "bizarc_corp",
       username: config?.username || process.env.ODOO_USER || "admin",
       password: config?.password || process.env.ODOO_PASSWORD || "api_key",
     };
+    this.transport = transport;
   }
 
   private async callJsonRpc<T>(service: string, method: string, args: any[]): Promise<T> {
+    if (this.transport) {
+      return await this.transport.callJsonRpc<T>(service, method, args);
+    }
+
     const url = new URL("/jsonrpc", this.config.baseUrl);
     const body = {
       jsonrpc: "2.0",
@@ -74,10 +85,10 @@ export class OdooConnector {
     });
 
     if (!response.ok) {
-      throw new Error(`Odoo JSON-RPC HTTP error: ${response.status} ${response.statusText}`);
+      throw new Error(`Odoo JSON-RPC HTTP error: HTTP ${response.status} ${response.statusText}`);
     }
 
-    const json = await response.json() as any;
+    const json = (await response.json()) as any;
     if (json.error) {
       throw new Error(`Odoo JSON-RPC error: ${JSON.stringify(json.error)}`);
     }
@@ -90,19 +101,13 @@ export class OdooConnector {
    */
   public async authenticate(): Promise<number> {
     if (this.uid !== null) return this.uid;
-    try {
-      this.uid = await this.callJsonRpc<number>("common", "authenticate", [
-        this.config.db,
-        this.config.username,
-        this.config.password,
-        {},
-      ]);
-      return this.uid;
-    } catch {
-      // In offline/test mode, assign a valid user id
-      this.uid = 1;
-      return this.uid;
-    }
+    this.uid = await this.callJsonRpc<number>("common", "authenticate", [
+      this.config.db,
+      this.config.username,
+      this.config.password,
+      {},
+    ]);
+    return this.uid;
   }
 
   /**
@@ -130,85 +135,40 @@ export class OdooConnector {
    * Fetches Purchase Orders from Odoo.
    */
   public async getPurchaseOrders(domain: any[] = []): Promise<OdooPurchaseOrder[]> {
-    try {
-      return await this.executeKw<OdooPurchaseOrder[]>("purchase.order", "search_read", [domain], {
-        fields: ["name", "partner_id", "amount_total", "state", "order_line"],
-      });
-    } catch {
-      return [
-        {
-          id: 101,
-          name: "PO-2026-AWS-01",
-          partner_id: [42, "AWS EMEA"],
-          amount_total: 12500.0,
-          state: "purchase",
-          order_line: [1001],
-        },
-      ];
-    }
+    return await this.executeKw<OdooPurchaseOrder[]>("purchase.order", "search_read", [domain], {
+      fields: ["name", "partner_id", "amount_total", "state", "order_line"],
+    });
   }
 
   /**
    * Fetches Stock Pickings (Receipts/GRN) to verify Goods Delivery (Rule 2).
    */
   public async getStockPickings(originPo?: string): Promise<OdooStockPicking[]> {
-    try {
-      const domain = originPo ? [["origin", "=", originPo]] : [];
-      return await this.executeKw<OdooStockPicking[]>("stock.picking", "search_read", [domain], {
-        fields: ["name", "origin", "state", "date_done"],
-      });
-    } catch {
-      return [
-        {
-          id: 501,
-          name: "GRN-2026-AWS-01",
-          origin: originPo || "PO-2026-AWS-01",
-          state: "done",
-          date_done: new Date().toISOString(),
-        },
-      ];
-    }
+    const domain = originPo ? [["origin", "=", originPo]] : [];
+    return await this.executeKw<OdooStockPicking[]>("stock.picking", "search_read", [domain], {
+      fields: ["name", "origin", "state", "date_done"],
+    });
   }
 
   /**
    * Fetches Vendor Bills (account.move) from Odoo.
    */
   public async getVendorBills(domain: any[] = [["move_type", "=", "in_invoice"]]): Promise<OdooAccountMove[]> {
-    try {
-      return await this.executeKw<OdooAccountMove[]>("account.move", "search_read", [domain], {
-        fields: ["name", "partner_id", "move_type", "amount_total", "amount_residual", "invoice_date_due", "payment_state"],
-      });
-    } catch {
-      return [
-        {
-          id: 901,
-          name: "BILL/2026/05/0001",
-          partner_id: [42, "AWS EMEA"],
-          move_type: "in_invoice",
-          amount_total: 12500.0,
-          amount_residual: 12500.0,
-          invoice_date_due: new Date(Date.now() + 86400000 * 5).toISOString(),
-          payment_state: "not_paid",
-          invoice_line_ids: [2001],
-        },
-      ];
-    }
+    return await this.executeKw<OdooAccountMove[]>("account.move", "search_read", [domain], {
+      fields: ["name", "partner_id", "move_type", "amount_total", "amount_residual", "invoice_date_due", "payment_state"],
+    });
   }
 
   /**
    * Rule 1 Enforcer: Registers onchain payment against Odoo invoice `account.move`.
    */
   public async registerPayment(moveId: number, amount: number, txHash: string): Promise<{ success: boolean; paymentId: number }> {
-    try {
-      const paymentResult = await this.executeKw<number>("account.payment.register", "create", [
-        {
-          amount,
-          communication: `Settled via BizArc DisbursalVault on Arc L1. Tx: ${txHash}`,
-        },
-      ]);
-      return { success: true, paymentId: paymentResult };
-    } catch {
-      return { success: true, paymentId: Date.now() };
-    }
+    const paymentResult = await this.executeKw<number>("account.payment.register", "create", [
+      {
+        amount,
+        communication: `Settled via BizArc DisbursalVault on Arc L1. Tx: ${txHash}`,
+      },
+    ]);
+    return { success: true, paymentId: paymentResult };
   }
 }

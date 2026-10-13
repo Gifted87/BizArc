@@ -20,14 +20,20 @@ Your primary mandate is Golden Rule 2 & Golden Rule 3:
         "verify_three_way_match",
         "check_vendor_master",
         "read_dynamic_records",
+        "ingest_enterprise_documents",
+        "add_account_liability",
+        "edit_account_liability",
+        "remove_account_liability",
+        "scan_predictive_liabilities",
+        "evaluate_reason_bearing_intent",
       ],
       ...deps,
     });
   }
 
   /**
-   * Autonomous LLM Ingestion & Forensic Verification of an incoming Invoice.
-   * Runs the ReAct deliberation loop through the model-agnostic LLM engine.
+   * Autonomous LLM Ingestion & Forensic Verification of an incoming Invoice / Document.
+   * Runs the ReAct deliberation loop through the model-agnostic LLM engine using tools.
    */
   public async ingestAndVerifyInvoice(
     sessionId: string,
@@ -37,10 +43,13 @@ Your primary mandate is Golden Rule 2 & Golden Rule 3:
       invoiceId: string;
       amountUsdc: string;
       claimedPayoutAddress: string;
-      poReference: string;
+      poReference?: string;
+      category?: string;
+      dueDate?: string;
+      preferredPaymentRail?: string;
     }
   ) {
-    const task = `Perform forensic verification and 3-way match on incoming invoice ${invoice.invoiceId} from vendor ${invoice.vendorId} for ${invoice.amountUsdc} USDC on PO ${invoice.poReference} with claimed payout address ${invoice.claimedPayoutAddress}. Verify payee substitution against Vendor Master. If valid, update Dynamic Record 1 for account ${invoice.accountId}. If payee substitution or price mismatch is detected, reject and alert compliance.`;
+    const task = `Perform forensic verification, 3-way match, and payee lock validation for invoice ${invoice.invoiceId} from vendor ${invoice.vendorId} for ${invoice.amountUsdc} USDC on PO ${invoice.poReference || "N/A"} with claimed payout address ${invoice.claimedPayoutAddress}. Verify payee substitution against Vendor Master. If valid and verified, invoke tool 'add_account_liability' to stage the liability in Dynamic Record 1 for account ${invoice.accountId}. If payee mismatch or stealth price creep is detected, reject and alert compliance.`;
     return this.executeTask(sessionId, task, invoice);
   }
 }
