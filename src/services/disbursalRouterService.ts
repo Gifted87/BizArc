@@ -2,6 +2,7 @@ import { keccak256, encodePacked } from "viem";
 import { UnifiedAssetAggregatorService, AccountAssetDistribution } from "./unifiedAssetAggregatorService.js";
 import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
 import { VendorMasterRepo } from "../database/repos/vendorMasterRepo.js";
+import { TreasuryAccountsRepo } from "../database/repos/treasuryAccountsRepo.js";
 import { DisbursalVaultService } from "../contracts/disbursalVaultService.js";
 import { CentralTreasuryYieldVaultService } from "../contracts/centralTreasuryYieldVaultService.js";
 import { DisbursalVaultABI } from "../contracts/index.js";
@@ -229,7 +230,24 @@ export class DisbursalRouterService {
     );
 
     // 2. Fetch Unified Asset Distribution across All Accounts (D14 Integration)
-    const companyDistribution = await this.aggregator.aggregateCompanyAssets(request.balanceOverrides);
+    let companyDistribution;
+    try {
+      companyDistribution = await this.aggregator.aggregateCompanyAssets(request.balanceOverrides);
+    } catch (err: any) {
+      if (err?.name === "DataFeedError" || err?.message?.includes("DataFeedError")) {
+        const allAccounts = await TreasuryAccountsRepo.getAllAccounts();
+        const fallbackOverrides: Record<string, { liquidUsdc?: string; investedUsyc?: string }> = {};
+        for (const acc of allAccounts) {
+          fallbackOverrides[acc.account_id] = { investedUsyc: "0.000000" };
+        }
+        companyDistribution = await this.aggregator.aggregateCompanyAssets({
+          ...fallbackOverrides,
+          ...(request.balanceOverrides || {}),
+        });
+      } else {
+        throw err;
+      }
+    }
     const activeAccounts = companyDistribution.accountsDistribution.filter((a) => a.isActive);
 
     // 3. Sentence 19: Check for Single-Account Qualification

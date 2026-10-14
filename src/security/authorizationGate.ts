@@ -1,4 +1,4 @@
-import { keccak256, encodePacked, recoverTypedDataAddress, type Hex } from "viem";
+import { keccak256, encodePacked, recoverTypedDataAddress, recoverMessageAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { DbClient } from "../database/dbClient.js";
 import type { PolicyComplianceLlmAgent, ComplianceEvaluationResult } from "../agents/policyComplianceLlmAgent.js";
@@ -85,11 +85,32 @@ export class AuthorizationGate {
       } catch {}
     }
 
-    // Default development / testnet admin approver (Account 0)
-    const defaultAcct = privateKeyToAccount(DEFAULT_ADMIN_PRIVATE_KEY);
-    list.push(defaultAcct.address.toLowerCase());
+    // Default development / testnet admin approver (Account 0) - strictly disabled in production
+    if (process.env.NODE_ENV !== "production") {
+      const defaultAcct = privateKeyToAccount(DEFAULT_ADMIN_PRIVATE_KEY);
+      list.push(defaultAcct.address.toLowerCase());
+    }
 
     return Array.from(new Set(list)) as `0x${string}`[];
+  }
+
+  /**
+   * Verifies standard personal/SIWE message signatures against an expected wallet address.
+   */
+  public static async verifyMessageSignature(params: {
+    message: string;
+    signature: `0x${string}`;
+    expectedAddress: string;
+  }): Promise<boolean> {
+    try {
+      const recovered = await recoverMessageAddress({
+        message: params.message,
+        signature: params.signature,
+      });
+      return recovered.toLowerCase() === params.expectedAddress.toLowerCase();
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -145,7 +166,11 @@ export class AuthorizationGate {
     const pk = params.privateKey ||
       (process.env.ADMIN_PRIVATE_KEY as `0x${string}`) ||
       (process.env.TEST_ADMIN_PRIVATE_KEY as `0x${string}`) ||
-      DEFAULT_ADMIN_PRIVATE_KEY;
+      (process.env.NODE_ENV !== "production" ? DEFAULT_ADMIN_PRIVATE_KEY : undefined);
+
+    if (!pk) {
+      throw new Error("PRODUCTION_SECURITY_ERROR: No authorized admin private key configured for signing.");
+    }
 
     const account = privateKeyToAccount(pk);
     const typedData = this.getIntentAuthorizationTypedData(
