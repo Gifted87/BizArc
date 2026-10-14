@@ -277,6 +277,7 @@ async function main() {
     const VAULT_ADDR = "0xVAULT0000000000000000000000000000000001" as `0x${string}`;
     const ACC_ADDR   = "0xACCT00000000000000000000000000000000001" as `0x${string}`;
     engine.registerInternalAddress(VAULT_ADDR);
+    engine.registerInternalAddress(ACC_ADDR);
 
     const onQuiescent = async () => { externalCallbackFired++; };
     const onInternal  = () => { internalSettlementFired++; };

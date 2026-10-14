@@ -575,3 +575,119 @@ ALTER TABLE fiat_deposit_sessions
 
 ALTER TABLE vendor_master_registry
     ALTER COLUMN verified_payout_address DROP NOT NULL;
+
+-- ======================================================================================
+-- 28. Multi-Tenant Enterprise IAM (Tenants, Users, Memberships, Sessions, API Keys)
+-- ======================================================================================
+
+-- Tenants (Organizations / Corporate Entities)
+CREATE TABLE IF NOT EXISTS tenants (
+    tenant_id VARCHAR(64) PRIMARY KEY,
+    slug VARCHAR(64) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    legal_name VARCHAR(255),
+    country VARCHAR(8) DEFAULT 'US',
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE', -- 'PENDING_ONBOARDING', 'ACTIVE', 'SUSPENDED'
+    settings JSONB NOT NULL DEFAULT '{"baseCurrency": "USDC", "requireMfa": false, "defaultReserveRatio": 1.20}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenants_slug ON tenants(slug);
+CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
+
+-- Users (Human Identities)
+CREATE TABLE IF NOT EXISTS users (
+    user_id VARCHAR(64) PRIMARY KEY,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    avatar_url TEXT,
+    phone_number VARCHAR(32),
+    is_system_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    mfa_secret VARCHAR(128),
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE', -- 'ACTIVE', 'LOCKED', 'DEACTIVATED'
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(LOWER(email));
+CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+
+-- Tenant Memberships (Team associations with Granular RBAC)
+CREATE TABLE IF NOT EXISTS tenant_memberships (
+    membership_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+    user_id VARCHAR(64) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role VARCHAR(32) NOT NULL, -- 'OWNER', 'CFO', 'TREASURY_OFFICER', 'AP_SPECIALIST', 'AUDITOR_VIEWER'
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE', -- 'ACTIVE', 'SUSPENDED'
+    joined_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uq_tenant_user UNIQUE (tenant_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memberships_tenant ON tenant_memberships(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_memberships_user ON tenant_memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_memberships_role ON tenant_memberships(role);
+
+-- Tenant Invitations (Pending invites for team members)
+CREATE TABLE IF NOT EXISTS tenant_invitations (
+    invitation_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    role VARCHAR(32) NOT NULL, -- 'OWNER', 'CFO', 'TREASURY_OFFICER', 'AP_SPECIALIST', 'AUDITOR_VIEWER'
+    invite_token_hash VARCHAR(64) NOT NULL UNIQUE,
+    invited_by_user_id VARCHAR(64) REFERENCES users(user_id) ON DELETE SET NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'ACCEPTED', 'EXPIRED', 'REVOKED'
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    accepted_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_invitations_tenant ON tenant_invitations(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_invitations_email ON tenant_invitations(LOWER(email));
+CREATE INDEX IF NOT EXISTS idx_invitations_token ON tenant_invitations(invite_token_hash);
+
+-- Persistent User Sessions (Distributed & Multi-Workspace Session Store)
+CREATE TABLE IF NOT EXISTS user_sessions (
+    session_id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    active_tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    user_agent TEXT,
+    ip_address VARCHAR(64),
+    expires_at TIMESTAMPTZ NOT NULL,
+    last_active_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_active_tenant ON user_sessions(active_tenant_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at);
+
+-- Tenant-Scoped API Keys (Scoped Machine-to-Machine Credentials)
+CREATE TABLE IF NOT EXISTS tenant_api_keys (
+    key_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+    name VARCHAR(128) NOT NULL,
+    key_prefix VARCHAR(32) NOT NULL,
+    key_hash VARCHAR(64) NOT NULL UNIQUE,
+    scopes JSONB NOT NULL DEFAULT '["read:treasury", "write:liabilities", "read:journal"]'::jsonb,
+    created_by_user_id VARCHAR(64) REFERENCES users(user_id) ON DELETE SET NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE tenant_api_keys ALTER COLUMN key_prefix TYPE VARCHAR(32);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON tenant_api_keys(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON tenant_api_keys(key_hash);
+
+-- Default system organization seed for backwards compatibility
+INSERT INTO tenants (tenant_id, slug, name, legal_name, status)
+VALUES ('default_org', 'default-org', 'Default Organization', 'Default Organization Inc.', 'ACTIVE')
+ON CONFLICT (tenant_id) DO NOTHING;
+

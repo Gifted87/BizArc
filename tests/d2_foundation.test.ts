@@ -103,7 +103,9 @@ console.log("✓ AccountLockManager concurrency control verified");
 console.log("5. Verifying DebounceEngine & Internal Settlement Filtering...");
 const debounce = new DebounceEngine(100); // 100ms for test speed
 const internalVault = "0x1111111111111111111111111111111111111111" as `0x${string}`;
+const internalOperatingAccount = "0x2222222222222222222222222222222222222222" as `0x${string}`;
 debounce.registerInternalAddress(internalVault);
+debounce.registerInternalAddress(internalOperatingAccount);
 
 let internalSettlementFired = false;
 debounce.ingestEvent(

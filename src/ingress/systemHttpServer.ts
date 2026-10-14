@@ -56,6 +56,12 @@ import { McpAppConnector } from "../connectors/mcpAppConnector.js";
 import { TreasuryAccountsRepo } from "../database/repos/treasuryAccountsRepo.js";
 import { LiabilityRepo } from "../database/repos/liabilityRepo.js";
 import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
+import { AuthService } from "../services/authService.js";
+import { TeamService } from "../services/teamService.js";
+import { TenantApiKeyService } from "../services/tenantApiKeyService.js";
+import { TenantRepo, TenantRecord } from "../database/repos/tenantRepo.js";
+import { UserRepo, SafeUserRecord } from "../database/repos/userRepo.js";
+import { TenantMembershipRepo, TenantRole } from "../database/repos/tenantMembershipRepo.js";
 
 export const DEFAULT_API_KEY = "bizarc_auth_token_live_2026";
 
@@ -66,6 +72,17 @@ export interface SessionInfo {
   role: string;
   permissions: string[];
   expiresAt: number;
+}
+
+export interface AuthContext {
+  authenticated: boolean;
+  error?: string;
+  session?: SessionInfo;
+  user?: SafeUserRecord;
+  tenant?: TenantRecord;
+  role?: string;
+  permissions?: string[];
+  isApiKey?: boolean;
 }
 
 export class SystemHttpServer {
@@ -205,10 +222,12 @@ export class SystemHttpServer {
   }
 
   /**
+  /**
    * Ingress Authentication Gatekeeper:
-   * Validates API Key, Bearer Token, or active user Session against configured credentials.
+   * Validates Scoped Tenant API Keys, Persistent Database User Sessions, Master API Key,
+   * or legacy in-memory sessions against configured credentials.
    */
-  private authenticate(req: IncomingMessage): { authenticated: boolean; error?: string; session?: SessionInfo } {
+  private async authenticate(req: IncomingMessage): Promise<AuthContext> {
     const configuredKey =
       process.env.BIZARC_API_KEY ||
       process.env.ADMIN_API_KEY ||
@@ -231,9 +250,57 @@ export class SystemHttpServer {
       };
     }
 
+    // 1. Scoped Tenant API Key verification (e.g. biz_live_...)
+    if (token.startsWith("biz_")) {
+      const apiKeyResult = await TenantApiKeyService.verifyApiKey(token);
+      if (apiKeyResult) {
+        const { apiKey, tenant } = apiKeyResult;
+        return {
+          authenticated: true,
+          tenant,
+          role: "API_SERVICE",
+          permissions: apiKey.scopes,
+          isApiKey: true,
+          session: {
+            token,
+            companyId: tenant.tenant_id,
+            operatorId: apiKey.name,
+            role: "API_SERVICE",
+            permissions: apiKey.scopes,
+            expiresAt: apiKey.expires_at ? new Date(apiKey.expires_at).getTime() : Date.now() + 86400000,
+          },
+        };
+      }
+    }
+
+    // 2. Persistent Database-Backed Session verification (e.g. session_user_... or raw 32+ char token)
+    if (token.startsWith("session_user_") || token.startsWith("tok_") || token.length >= 32) {
+      const populated = await AuthService.validateSession(token);
+      if (populated) {
+        return {
+          authenticated: true,
+          user: populated.user,
+          tenant: populated.tenant,
+          role: populated.role,
+          permissions: populated.permissions,
+          session: {
+            token,
+            companyId: populated.tenant.tenant_id,
+            operatorId: populated.user.user_id,
+            role: populated.role,
+            permissions: populated.permissions,
+            expiresAt: new Date(populated.session.expires_at).getTime(),
+          },
+        };
+      }
+    }
+
+    // 3. Legacy master API key verification
     if (token === configuredKey) {
       return {
         authenticated: true,
+        role: "MASTER_ADMIN",
+        permissions: ["ALL"],
         session: {
           token,
           companyId: "default_org",
@@ -245,10 +312,16 @@ export class SystemHttpServer {
       };
     }
 
+    // 4. Legacy in-memory session verification
     if (this.sessions.has(token)) {
       const sess = this.sessions.get(token)!;
       if (sess.expiresAt > Date.now()) {
-        return { authenticated: true, session: sess };
+        return {
+          authenticated: true,
+          session: sess,
+          role: sess.role,
+          permissions: sess.permissions,
+        };
       }
       this.sessions.delete(token);
     }
@@ -271,6 +344,55 @@ export class SystemHttpServer {
     // Public Endpoint: Health Check Probe
     if (pathname === "/api/health" && method === "GET") {
       return this.sendJson(req, res, 200, { status: "HEALTHY", uptime: process.uptime() });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // NEW ENTERPRISE MULTI-TENANT AUTHENTICATION (PUBLIC ENDPOINTS)
+    // ─────────────────────────────────────────────────────────────────────────────
+    if (pathname === "/api/v1/auth/signup" && method === "POST") {
+      try {
+        const body = await this.parseBody(req);
+        const result = await AuthService.signUp({
+          email: body.email,
+          password: body.password,
+          fullName: body.fullName,
+          companyName: body.companyName,
+          slug: body.slug,
+          country: body.country,
+        });
+        return this.sendJson(req, res, 201, { success: true, ...result });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname === "/api/v1/auth/login" && method === "POST") {
+      try {
+        const body = await this.parseBody(req);
+        const result = await AuthService.login({
+          email: body.email,
+          password: body.password,
+          userAgent: req.headers["user-agent"],
+          ipAddress: req.socket.remoteAddress,
+        });
+        return this.sendJson(req, res, 200, { success: true, ...result });
+      } catch (err: any) {
+        return this.sendJson(req, res, 401, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname === "/api/v1/teams/invitations/accept" && method === "POST") {
+      try {
+        const body = await this.parseBody(req);
+        const result = await TeamService.acceptInvitation({
+          rawToken: body.token,
+          password: body.password,
+          fullName: body.fullName,
+        });
+        return this.sendJson(req, res, 200, { success: true, ...result });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -331,7 +453,7 @@ export class SystemHttpServer {
     // ─────────────────────────────────────────────────────────────────────────────
     // INGRESS AUTHENTICATION BARRIER
     // ─────────────────────────────────────────────────────────────────────────────
-    const auth = this.authenticate(req);
+    const auth = await this.authenticate(req);
     if (!auth.authenticated) {
       return this.sendJson(req, res, 401, {
         error: "UNAUTHORIZED",
@@ -339,7 +461,19 @@ export class SystemHttpServer {
       });
     }
 
-    // Category 11: Current User Profile
+    // Tenant Isolation Guard
+    const resolveTenantId = (requestedCompanyId?: string | null): string => {
+      const activeId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      if (!requestedCompanyId || requestedCompanyId === activeId) {
+        return activeId;
+      }
+      if (auth.role === "MASTER_ADMIN" || auth.user?.is_system_admin) {
+        return requestedCompanyId;
+      }
+      throw new Error(`FORBIDDEN_TENANT_ACCESS: Cross-tenant access to '${requestedCompanyId}' is forbidden.`);
+    };
+
+    // Category 11 & New Auth Me
     if (pathname === "/api/auth/me" && method === "GET") {
       return this.sendJson(req, res, 200, {
         success: true,
@@ -347,27 +481,256 @@ export class SystemHttpServer {
       });
     }
 
+    if (pathname === "/api/v1/auth/me" && method === "GET") {
+      const availableTenants = auth.user
+        ? await TenantRepo.listTenantsForUser(auth.user.user_id)
+        : [];
+      return this.sendJson(req, res, 200, {
+        success: true,
+        user: auth.user || auth.session,
+        tenant: auth.tenant || { tenant_id: auth.session?.companyId, name: auth.session?.companyId },
+        role: auth.role,
+        permissions: auth.permissions,
+        availableTenants,
+      });
+    }
+
+    if (pathname === "/api/v1/auth/logout" && method === "POST") {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
+      if (token) {
+        await AuthService.logout(token);
+        this.sessions.delete(token);
+      }
+      return this.sendJson(req, res, 200, { success: true, message: "Logged out successfully." });
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
-    // CATEGORY 1: ACCOUNT LIFECYCLE & MANAGEMENT APIS
+    // MULTI-TENANT WORKSPACES & TEAMS APIS (/api/v1/tenants & /api/v1/teams)
     // ─────────────────────────────────────────────────────────────────────────────
-    if (pathname === "/api/accounts" && method === "GET") {
-      const companyId = url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
+    if (pathname === "/api/v1/tenants" && method === "GET") {
+      if (!auth.user) {
+        return this.sendJson(req, res, 200, {
+          success: true,
+          count: 1,
+          tenants: [{ tenant_id: auth.session?.companyId || "default_org", name: "Default Organization", role: auth.role }],
+        });
+      }
+      const tenants = await TenantRepo.listTenantsForUser(auth.user.user_id);
+      return this.sendJson(req, res, 200, { success: true, count: tenants.length, tenants });
+    }
+
+    if (pathname === "/api/v1/tenants" && method === "POST") {
       try {
-        const accounts = await this.accountManagementService.listAccounts(companyId);
-        return this.sendJson(req, res, 200, { success: true, count: accounts.length, data: accounts });
+        const body = await this.parseBody(req);
+        if (!body.name) {
+          return this.sendJson(req, res, 400, { success: false, error: "NAME_REQUIRED: Organization name is required." });
+        }
+        const baseSlug = (body.slug || body.name).toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-");
+        let slug = baseSlug || "corp";
+        const existing = await TenantRepo.getTenantBySlug(slug);
+        if (existing) slug = `${slug}-${Math.random().toString(36).substring(2, 6)}`;
+
+        const tenant = await TenantRepo.createTenant({
+          slug,
+          name: body.name,
+          legal_name: body.legalName,
+          country: body.country,
+          settings: body.settings,
+        });
+
+        if (auth.user) {
+          await TenantMembershipRepo.addMember({
+            tenant_id: tenant.tenant_id,
+            user_id: auth.user.user_id,
+            role: "OWNER",
+          });
+        }
+
+        return this.sendJson(req, res, 201, { success: true, tenant });
       } catch (err: any) {
         return this.sendJson(req, res, 400, { success: false, error: err.message });
       }
     }
 
-    if (pathname === "/api/accounts" && method === "POST") {
-      const body = await this.parseBody(req);
-      const companyId = body.companyId || url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
+    if (pathname === "/api/v1/tenants/switch" && method === "POST") {
       try {
+        const body = await this.parseBody(req);
+        const authHeader = req.headers.authorization;
+        const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : (req.headers["x-api-key"] as string);
+        if (!token) {
+          return this.sendJson(req, res, 400, { success: false, error: "TOKEN_REQUIRED" });
+        }
+        const switched = await AuthService.switchTenant(token, body.tenantId);
+        return this.sendJson(req, res, 200, { success: true, ...switched });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname === "/api/v1/tenants/current" && method === "GET") {
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      const tenant = await TenantRepo.getTenantById(activeTenantId);
+      return this.sendJson(req, res, 200, { success: true, tenant });
+    }
+
+    if (pathname === "/api/v1/tenants/current" && method === "PUT") {
+      if (auth.role !== "OWNER" && auth.role !== "CFO" && auth.role !== "MASTER_ADMIN") {
+        return this.sendJson(req, res, 403, { success: false, error: "FORBIDDEN: Only Owners and CFOs can update organization settings." });
+      }
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      const body = await this.parseBody(req);
+      const updated = await TenantRepo.updateTenant(activeTenantId, body);
+      return this.sendJson(req, res, 200, { success: true, tenant: updated });
+    }
+
+    if (pathname === "/api/v1/teams/members" && method === "GET") {
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      const members = await TeamService.getMembers(activeTenantId);
+      return this.sendJson(req, res, 200, { success: true, count: members.length, members });
+    }
+
+    if (pathname === "/api/v1/teams/invite" && method === "POST") {
+      if (auth.role !== "OWNER" && auth.role !== "MASTER_ADMIN") {
+        return this.sendJson(req, res, 403, { success: false, error: "FORBIDDEN: Only organization Owners can invite members." });
+      }
+      try {
+        const body = await this.parseBody(req);
+        const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+        const result = await TeamService.inviteMember({
+          tenantId: activeTenantId,
+          invitedByUserId: auth.user?.user_id || "system",
+          email: body.email,
+          role: body.role || "TREASURY_OFFICER",
+        });
+        return this.sendJson(req, res, 201, { success: true, ...result });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname === "/api/v1/teams/invitations" && method === "GET") {
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      const invitations = await TeamService.listPendingInvitations(activeTenantId);
+      return this.sendJson(req, res, 200, { success: true, count: invitations.length, invitations });
+    }
+
+    const memberRoleMatch = pathname.match(/^\/api\/v1\/teams\/members\/([^/]+)\/role$/);
+    if (memberRoleMatch && method === "PUT") {
+      const targetUserId = memberRoleMatch[1];
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      try {
+        const body = await this.parseBody(req);
+        const updated = await TeamService.updateMemberRole({
+          tenantId: activeTenantId,
+          targetUserId,
+          newRole: body.role,
+          actorRole: (auth.role as any) || "OWNER",
+        });
+        return this.sendJson(req, res, 200, { success: true, membership: updated });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
+    const memberDelMatch = pathname.match(/^\/api\/v1\/teams\/members\/([^/]+)$/);
+    if (memberDelMatch && method === "DELETE") {
+      const targetUserId = memberDelMatch[1];
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      try {
+        await TeamService.removeMember({
+          tenantId: activeTenantId,
+          targetUserId,
+          actorRole: (auth.role as any) || "OWNER",
+        });
+        return this.sendJson(req, res, 200, { success: true, message: "Member removed from organization." });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
+    const inviteDelMatch = pathname.match(/^\/api\/v1\/teams\/invitations\/([^/]+)$/);
+    if (inviteDelMatch && method === "DELETE") {
+      const invitationId = inviteDelMatch[1];
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      try {
+        await TeamService.revokeInvitation(activeTenantId, invitationId, (auth.role as any) || "OWNER");
+        return this.sendJson(req, res, 200, { success: true, message: "Invitation revoked." });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // TENANT-SCOPED MACHINE API KEYS (/api/v1/settings/api-keys)
+    // ─────────────────────────────────────────────────────────────────────────────
+    if (pathname === "/api/v1/settings/api-keys" && method === "GET") {
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      const apiKeys = await TenantApiKeyService.listApiKeys(activeTenantId);
+      return this.sendJson(req, res, 200, { success: true, count: apiKeys.length, apiKeys });
+    }
+
+    if (pathname === "/api/v1/settings/api-keys" && method === "POST") {
+      try {
+        const body = await this.parseBody(req);
+        const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+        const result = await TenantApiKeyService.generateApiKey({
+          tenantId: activeTenantId,
+          name: body.name,
+          scopes: body.scopes,
+          createdByUserId: auth.user?.user_id,
+          expiresInDays: body.expiresInDays,
+          actorRole: (auth.role as any) || "OWNER",
+        });
+        return this.sendJson(req, res, 201, { success: true, ...result });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
+    const keyDelMatch = pathname.match(/^\/api\/v1\/settings\/api-keys\/([^/]+)$/);
+    if (keyDelMatch && method === "DELETE") {
+      const keyId = keyDelMatch[1];
+      const activeTenantId = auth.tenant?.tenant_id || auth.session?.companyId || "default_org";
+      try {
+        await TenantApiKeyService.revokeApiKey(keyId, activeTenantId, (auth.role as any) || "OWNER");
+        return this.sendJson(req, res, 200, { success: true, message: "API key revoked." });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // CATEGORY 1: ACCOUNT LIFECYCLE & MANAGEMENT APIS
+    // ─────────────────────────────────────────────────────────────────────────────
+    if (pathname === "/api/accounts" && method === "GET") {
+      try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const accounts = await this.accountManagementService.listAccounts(companyId);
+        return this.sendJson(req, res, 200, { success: true, count: accounts.length, data: accounts });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname === "/api/accounts" && method === "POST") {
+      if (auth.role === "AUDITOR_VIEWER") {
+        return this.sendJson(req, res, 403, { success: false, error: "FORBIDDEN: Read-only Auditor role cannot create accounts." });
+      }
+      try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
         const created = await this.accountManagementService.createAccount(companyId, body);
         return this.sendJson(req, res, 201, { success: true, data: created });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -582,11 +945,19 @@ export class SystemHttpServer {
       const requestId = parts[3];
       const body = await this.parseBody(req);
 
-      if (body.decision === "APPROVE" && !body.adminSignature) {
-        return this.sendJson(req, res, 400, {
-          error: "SIGNATURE_REQUIRED",
-          message: "A valid cryptographic EIP-712 human adminSignature is required to approve SPRS requests.",
-        });
+      if (body.decision === "APPROVE") {
+        if (auth.role && auth.role !== "MASTER_ADMIN" && auth.role !== "OWNER" && auth.role !== "CFO" && auth.role !== "TREASURY_OFFICER") {
+          return this.sendJson(req, res, 403, {
+            error: "FORBIDDEN",
+            message: "Only CFO, Owner, and Treasury Officer roles have authorization to approve SPRS requests.",
+          });
+        }
+        if (!body.adminSignature) {
+          return this.sendJson(req, res, 400, {
+            error: "SIGNATURE_REQUIRED",
+            message: "A valid cryptographic EIP-712 human adminSignature is required to approve SPRS requests.",
+          });
+        }
       }
 
       try {
@@ -733,25 +1104,30 @@ export class SystemHttpServer {
     // CATEGORY 4: LIABILITIES & INVOICE SETTLEMENT APIS
     // ─────────────────────────────────────────────────────────────────────────────
     if (pathname === "/api/liabilities" && method === "POST") {
-      const body = await this.parseBody(req);
-      const companyId = body.companyId || url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
+      if (auth.role === "AUDITOR_VIEWER") {
+        return this.sendJson(req, res, 403, { success: false, error: "FORBIDDEN: Read-only Auditor role cannot create liabilities." });
+      }
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
         const liability = await this.liabilityManagementService.createLiability(companyId, body);
         return this.sendJson(req, res, 201, { success: true, data: liability });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/liabilities" && method === "GET") {
-      const companyId = url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
-      const accountId = url.searchParams.get("accountId") || undefined;
-      const status = (url.searchParams.get("status") as any) || undefined;
       try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const accountId = url.searchParams.get("accountId") || undefined;
+        const status = (url.searchParams.get("status") as any) || undefined;
         const liabilities = await this.liabilityManagementService.listLiabilities(companyId, { accountId, status });
         return this.sendJson(req, res, 200, { success: true, count: liabilities.length, data: liabilities });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
