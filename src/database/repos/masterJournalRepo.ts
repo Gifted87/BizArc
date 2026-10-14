@@ -137,9 +137,15 @@ export class MasterJournalRepo {
     });
   }
 
-  public static async getLatestEntry(): Promise<MasterJournalRecord | null> {
-    const text = `SELECT * FROM master_system_journal ORDER BY sequence_id DESC LIMIT 1;`;
-    const res = await DbClient.query<MasterJournalRecord>(text);
+  public static async getLatestEntry(companyId?: string): Promise<MasterJournalRecord | null> {
+    let text = `SELECT * FROM master_system_journal`;
+    const values: any[] = [];
+    if (companyId) {
+      values.push(companyId);
+      text += ` WHERE company_id = $1`;
+    }
+    text += ` ORDER BY sequence_id DESC LIMIT 1;`;
+    const res = await DbClient.query<MasterJournalRecord>(text, values);
     if (res.rows.length === 0) return null;
     const row = res.rows[0];
     return {

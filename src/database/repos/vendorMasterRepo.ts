@@ -174,4 +174,10 @@ export class VendorMasterRepo {
 
     throw new Error(`[VendorMasterRepo] No verified payout address found in master registry for vendor '${vendorId}'. Payee substitution policy requires admin registration.`);
   }
+
+  public static async deleteVendor(vendorId: string): Promise<boolean> {
+    const text = `DELETE FROM vendor_master_registry WHERE vendor_id = $1;`;
+    const res = await DbClient.query(text, [vendorId]);
+    return (res.rowCount ?? 0) > 0;
+  }
 }

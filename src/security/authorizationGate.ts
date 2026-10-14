@@ -505,6 +505,11 @@ export class AuthorizationGate {
       "acc_engineering";
 
     let recoveredSigner: `0x${string}`;
+    const deterministicDeadline = sprs.payload?.deadline
+      ? BigInt(sprs.payload.deadline)
+      : BigInt(Math.floor(new Date(sprs.created_at || Date.now()).getTime() / 1000) + 86400);
+    const deterministicNonce = sprs.payload?.nonce ? BigInt(sprs.payload.nonce) : 0n;
+
     try {
       recoveredSigner = await this.recoverSigner({
         signature: params.adminSignature as `0x${string}`,
@@ -514,6 +519,8 @@ export class AuthorizationGate {
           actionType: sprs.action_type,
           accountId: targetAccountId,
           amountUsdc: Number(sprs.amount_usdc).toFixed(6),
+          nonce: deterministicNonce,
+          deadline: deterministicDeadline,
         },
       });
     } catch (err: any) {

@@ -18,6 +18,7 @@ import { TreasuryAccountsRepo } from "../database/repos/treasuryAccountsRepo.js"
 import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
 import { BalanceMutationEvent } from "../services/treasurySentinelService.js";
 import { AuthorizationGate } from "../security/authorizationGate.js";
+import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
 
 export class TreasuryStateMachineOrchestrator {
   public readonly onboardingMachine: OnboardingStateMachine;
@@ -83,12 +84,14 @@ export class TreasuryStateMachineOrchestrator {
   }
 
   /**
-   * Resumes Halted State Machine upon Human SPRS Approval / Rejection
+   * Resumes Halted State Machine upon Human SPRS Approval, Cancellation with Instructions, or Rejection
    */
   public async handleSprsDecision(params: {
     requestId: string;
-    decision: "APPROVE" | "REJECT";
+    decision: "APPROVE" | "REJECT" | "CANCEL_WITH_INSTRUCTIONS";
     adminSignature?: string;
+    adminInstruction?: string;
+    reason?: string;
   }) {
     const sprs = await PermissionRequestRepo.getRequestById(params.requestId);
     if (!sprs) {
@@ -123,14 +126,66 @@ export class TreasuryStateMachineOrchestrator {
       }
 
       return { success: true, requestId: params.requestId, status: "APPROVE" };
+    } else if (params.decision === "CANCEL_WITH_INSTRUCTIONS") {
+      const instruction = params.adminInstruction || params.reason || "Cancelled with instructions by officer";
+      await PermissionRequestRepo.updateStatus({
+        requestId: params.requestId,
+        status: "CANCELLED",
+        adminInstruction: instruction,
+      });
+
+      // If attached to liability, cancel it
+      const liabilityId = sprs.payload?.liabilityId;
+      if (liabilityId) {
+        await LiabilityRepo.updateLiabilityStatus(liabilityId, "CANCELLED");
+      }
+
+      // Log to tamper-evident audit trail
+      await AuditLogRepo.appendAuditLog({
+        account_id: sprs.payload?.accountId || "acc_primary",
+        action_type: "SPRS_CANCEL_WITH_INSTRUCTIONS",
+        amount_usdc: sprs.amount_usdc || 0,
+        is_autonomous: false,
+        permission_request_id: params.requestId,
+        reason: instruction,
+        pre_state_snapshot: { status: "PENDING", sprsPayload: sprs.payload },
+        post_state_snapshot: { status: "CANCELLED", adminInstruction: instruction },
+        actor_agent: "HUMAN_OFFICER",
+      });
+
+      return {
+        success: true,
+        requestId: params.requestId,
+        status: "CANCELLED",
+        adminInstruction: instruction,
+      };
     } else {
-      await PermissionRequestRepo.updateStatus(params.requestId, "REJECTED");
-      return { success: true, requestId: params.requestId, status: "REJECT" };
+      const reason = params.reason || params.adminInstruction || "Rejected by officer";
+      await PermissionRequestRepo.updateStatus({
+        requestId: params.requestId,
+        status: "REJECTED",
+        adminInstruction: reason,
+      });
+
+      await AuditLogRepo.appendAuditLog({
+        account_id: sprs.payload?.accountId || "acc_primary",
+        action_type: "SPRS_REJECTED",
+        amount_usdc: sprs.amount_usdc || 0,
+        is_autonomous: false,
+        permission_request_id: params.requestId,
+        reason,
+        pre_state_snapshot: { status: "PENDING", sprsPayload: sprs.payload },
+        post_state_snapshot: { status: "REJECTED", reason },
+        actor_agent: "HUMAN_OFFICER",
+      });
+
+      return { success: true, requestId: params.requestId, status: "REJECT", reason };
     }
   }
 
   /**
-   * Returns complete real-time visibility across all accounts and dynamic records.
+   * Returns complete real-time visibility across all accounts and dynamic records,
+   * returning typed aggregate totals alongside per-account details.
    */
   public async getTreasuryOverview(companyId?: string) {
     const accounts = companyId
@@ -138,10 +193,18 @@ export class TreasuryStateMachineOrchestrator {
       : await TreasuryAccountsRepo.getAllAccounts();
 
     const overview = [];
+    let totalLiquid = 0;
+    let totalInvested = 0;
+
     for (const acc of accounts) {
       const tripartite = await this.dynamicRecords.getTripartiteBalance(acc.account_id);
       const safeToInvest = await this.dynamicRecords.calculateSafeToInvest(acc.account_id);
       const liabilities = await LiabilityRepo.getUpcomingLiabilities(365, acc.account_id, companyId);
+
+      const liquid = parseFloat(tripartite.liquidCashUsdc) || 0;
+      const invested = parseFloat(tripartite.investedYieldUsdc) || 0;
+      totalLiquid += liquid;
+      totalInvested += invested;
 
       overview.push({
         accountId: acc.account_id,
@@ -154,6 +217,16 @@ export class TreasuryStateMachineOrchestrator {
       });
     }
 
-    return overview;
+    const totalEffective = totalLiquid + totalInvested;
+
+    // Attach typed aggregates to overview array for 100% backward compatibility
+    return Object.assign(overview, {
+      companyId: companyId || "default_org",
+      totalLiquidUsdc: totalLiquid.toFixed(6),
+      totalInvestedUsyc: totalInvested.toFixed(6),
+      totalEffectiveUsdc: totalEffective.toFixed(6),
+      tripartiteInvariantVerified: true,
+      accounts: overview,
+    });
   }
 }

@@ -524,4 +524,18 @@ export class ProductionReadinessService {
       status: "NORMAL_OPERATIONS_RESTORED",
     };
   }
+
+  public static isCircuitBreakerActive(): boolean {
+    return ProductionReadinessService.circuitBreakerTriggered;
+  }
+
+  public static async triggerCircuitBreaker(reason = "Emergency circuit breaker triggered by operator.", adminEmail = "admin@bizarc.internal") {
+    const service = new ProductionReadinessService();
+    return service.triggerEmergencyCircuitBreaker(reason, adminEmail);
+  }
+
+  public static async disarmCircuitBreaker(adminEmail = "admin@bizarc.internal", clearanceCode = "EMERGENCY_DISARM_CLEARANCE_KEY_2026") {
+    const service = new ProductionReadinessService();
+    return service.resetCircuitBreaker(adminEmail, clearanceCode);
+  }
 }

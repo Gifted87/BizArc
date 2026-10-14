@@ -79,16 +79,18 @@ export class LiabilitySettingsService {
     if (params.preferredRail === "FIAT_PAYOUT" || params.fiatDetails) {
       if (params.fiatDetails) {
         const subMethod = params.preferredSubMethod || (params.fiatDetails.cardToken ? "PUSH_TO_CARD" : "FEDWIRE");
+        const iban = params.fiatDetails.ibanOrAccountNumber || (params.fiatDetails as any).ibanAccountNumber || "";
+        const routing = params.fiatDetails.routingOrSwift || (params.fiatDetails as any).routingSwift || (subMethod === "PUSH_TO_CARD" ? "CARD_OCT" : "");
         const bankRecord = await VendorBankRepo.createBankAccount({
           vendor_id: params.vendorId,
           account_holder_name: params.fiatDetails.accountHolderName,
-          iban_account_number: params.fiatDetails.ibanOrAccountNumber,
-          routing_swift: params.fiatDetails.routingOrSwift || (subMethod === "PUSH_TO_CARD" ? "CARD_OCT" : ""),
+          iban_account_number: iban,
+          routing_swift: routing,
           bank_name: params.fiatDetails.bankName,
           bank_country: params.fiatDetails.bankCountry || "US",
           payment_sub_method: subMethod,
           card_token: params.fiatDetails.cardToken || null,
-          card_last4: params.fiatDetails.cardLast4 || (params.fiatDetails.ibanOrAccountNumber.length === 16 ? params.fiatDetails.ibanOrAccountNumber.slice(-4) : null),
+          card_last4: params.fiatDetails.cardLast4 || (iban.length === 16 ? iban.slice(-4) : null),
           card_network: params.fiatDetails.cardNetwork || null,
           is_verified: true,
           verified_by_admin: "ADMIN_ONBOARDING",

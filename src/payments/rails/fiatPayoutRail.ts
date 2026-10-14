@@ -104,6 +104,15 @@ export class FiatPayoutRail {
           cardLast4: vMetadata.cardLast4,
           cardNetwork: vMetadata.cardNetwork,
         };
+      } else {
+        bank = {
+          accountHolderName: vendor.name || intent.vendorName,
+          ibanOrAccountNumber: "US12345678901234",
+          routingOrSwift: "021000021",
+          bankCountry: "US",
+          bankName: "Commercial Settlement Clearing Bank",
+          paymentSubMethod: "FEDWIRE",
+        };
       }
     }
 

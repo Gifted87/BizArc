@@ -5,7 +5,8 @@ export type PaymentRailType =
   | "MODULAR_SESSION_KEY"
   | "ERC3009_AUTHORIZATION"
   | "GATEWAY_X402"
-  | "FIAT_PAYOUT";
+  | "FIAT_PAYOUT"
+  | "FIAT_OFFRAMP";
 
 export type FiatSubMethodType =
   | "FEDWIRE"

@@ -223,7 +223,7 @@ export class LiabilityDisbursalStateMachine {
       const txHash = disbursalExecution.txHash || `0x${Date.now().toString(16)}`;
       const activeRail = disbursalExecution.rail;
 
-      if (activeRail === "FIAT_PAYOUT") {
+      if (activeRail === "FIAT_PAYOUT" || activeRail === "FIAT_OFFRAMP") {
         this.logTransition(instanceId, "FUNDS_STAGED_IN_VAULT", "FIAT_OFFRAMP_DISPATCHED", "FIAT_CONVERSION_INITIATED", {
           txHash,
           rail: activeRail,
@@ -245,7 +245,7 @@ export class LiabilityDisbursalStateMachine {
         txHash,
       });
 
-      this.logTransition(instanceId, activeRail === "FIAT_PAYOUT" ? "FIAT_OFFRAMP_DISPATCHED" : "CRYPTO_PAYMENT_DISPATCHED", "WITNESSED_AND_SETTLED", "PAYMENT_CONFIRMED", {
+      this.logTransition(instanceId, (activeRail === "FIAT_PAYOUT" || activeRail === "FIAT_OFFRAMP") ? "FIAT_OFFRAMP_DISPATCHED" : "CRYPTO_PAYMENT_DISPATCHED", "WITNESSED_AND_SETTLED", "PAYMENT_CONFIRMED", {
         txHash,
         rail: activeRail,
         journalSequenceId: disbursalExecution.journalSequenceId,

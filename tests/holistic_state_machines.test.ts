@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { TreasuryDaemon } from "../src/daemon/treasuryDaemon.js";
 import { TreasuryStateMachineOrchestrator } from "../src/orchestration/treasuryStateMachineOrchestrator.js";
 import { SystemHttpServer } from "../src/ingress/systemHttpServer.js";
@@ -22,7 +23,7 @@ test("Holistic 5 State Machines & Physical Triggers Suite", async (t) => {
     company_id: testCompanyId,
     name: "Core Operations Account",
     role: "OPEX_DEV",
-    wallet_address: "0x1111111111111111111111111111111111111111",
+    wallet_address: `0x${crypto.randomBytes(20).toString("hex")}` as `0x${string}`,
     chain_id: 5042002,
     min_operating_floor_usdc: 500,
     safety_buffer_ratio: 0.2,
@@ -34,7 +35,7 @@ test("Holistic 5 State Machines & Physical Triggers Suite", async (t) => {
     company_id: testCompanyId,
     name: "Dedicated Payroll Account",
     role: "PAYROLL",
-    wallet_address: "0x2222222222222222222222222222222222222222",
+    wallet_address: `0x${crypto.randomBytes(20).toString("hex")}` as `0x${string}`,
     chain_id: 5042002,
     min_operating_floor_usdc: 10000,
     safety_buffer_ratio: 0.2,
@@ -258,7 +259,7 @@ test("Holistic 5 State Machines & Physical Triggers Suite", async (t) => {
     });
     assert.strictEqual(overviewRes.status, 200);
     const overviewBody = await overviewRes.json();
-    assert.ok(Array.isArray(overviewBody.overview));
+    assert.ok(Array.isArray(overviewBody.overview?.accounts || overviewBody.overview));
 
     // Testing SPRS decision via HTTP: approval without signature rejected with 400 SIGNATURE_REQUIRED
     const testSprsId = `SPRS_HTTP_TEST_${Date.now()}`;

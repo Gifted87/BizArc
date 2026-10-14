@@ -97,4 +97,41 @@ export class PermissionRequestRepo {
       requestId,
     ]);
   }
+
+  public static async getAllRequests(filters?: {
+    status?: PermissionRequestStatus;
+    companyId?: string;
+    limit?: number;
+  }): Promise<PermissionRequestRecord[]> {
+    let text = `SELECT * FROM permission_requests`;
+    const conditions: string[] = [];
+    const values: any[] = [];
+
+    if (filters?.status) {
+      values.push(filters.status);
+      conditions.push(`status = $${values.length}`);
+    }
+
+    if (filters?.companyId) {
+      values.push(filters.companyId);
+      conditions.push(`payload->>'companyId' = $${values.length}`);
+    }
+
+    if (conditions.length > 0) {
+      text += ` WHERE ` + conditions.join(" AND ");
+    }
+
+    text += ` ORDER BY created_at DESC`;
+
+    if (filters?.limit) {
+      values.push(filters.limit);
+      text += ` LIMIT $${values.length}`;
+    }
+
+    const result = await DbClient.query(text, values);
+    return result.rows.map((row) => ({
+      ...row,
+      amount_usdc: Number(row.amount_usdc),
+    }));
+  }
 }

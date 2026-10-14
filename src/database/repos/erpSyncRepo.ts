@@ -81,4 +81,37 @@ export class ErpSyncRepo {
     if (result.rows.length === 0) return null;
     return result.rows[0];
   }
+
+  public static async recordSyncCheckpoint(params: {
+    companyId?: string;
+    systemType: "ERPNEXT" | "ODOO" | string;
+    entityType?: "PURCHASE_INVOICE" | "PAYMENT_ENTRY" | "PURCHASE_ORDER" | "STOCK_PICKING" | string;
+    lastSyncedDocumentId?: string;
+    status?: "SYNCED" | "SYNCING" | "FAILED" | "SUCCESS" | string;
+    threeWayMatchVerified?: boolean;
+    txHash?: string;
+    invoiceId?: string;
+  }): Promise<ErpSyncRecord> {
+    const syncId = `SYNC_${params.systemType}_${params.companyId || "default_org"}`;
+    return this.upsertSyncState({
+      sync_id: syncId,
+      system_type: (params.systemType === "ODOO" ? "ODOO" : "ERPNEXT"),
+      entity_type: (params.entityType as any) || "PAYMENT_ENTRY",
+      last_sync_timestamp: new Date(),
+      last_synced_document_id: params.lastSyncedDocumentId,
+      sync_checkpoint_data: {
+        companyId: params.companyId,
+        threeWayMatchVerified: params.threeWayMatchVerified,
+        txHash: params.txHash,
+        invoiceId: params.invoiceId,
+      },
+      status: params.status === "FAILED" ? "FAILED" : "SYNCED",
+    });
+  }
+
+  public static async getLatestSyncCheckpoint(companyId?: string): Promise<ErpSyncRecord | null> {
+    const text = `SELECT * FROM erp_sync_state ORDER BY updated_at DESC LIMIT 1;`;
+    const result = await DbClient.query<ErpSyncRecord>(text);
+    return result.rows.length > 0 ? result.rows[0] : null;
+  }
 }

@@ -220,7 +220,7 @@ export class UniversalPaymentRouter {
     let vendorRecord = await VendorMasterRepo.getVendorById(intent.vendorId);
 
     // If intent has no beneficiaryBank but preference or rail indicates FIAT_PAYOUT, resolve bank
-    const isPreferredFiat = overrideRail === "FIAT_PAYOUT" || vendorPreference?.preferred_rail === "FIAT_PAYOUT";
+    const isPreferredFiat = overrideRail === "FIAT_PAYOUT" || overrideRail === "FIAT_OFFRAMP" || vendorPreference?.preferred_rail === "FIAT_PAYOUT" || vendorPreference?.preferred_rail === "FIAT_OFFRAMP";
     if (!intent.beneficiaryBank && isPreferredFiat) {
       try {
         const bankRecord = vendorPreference?.bank_account_id
@@ -273,6 +273,7 @@ export class UniversalPaymentRouter {
     // 3A. Verify EVM payout address (only for crypto rails where payoutAddress is required)
     if (
       activeRail !== "FIAT_PAYOUT" &&
+      activeRail !== "FIAT_OFFRAMP" &&
       vendorRecord &&
       intent.payoutAddress &&
       intent.payoutAddress.startsWith("0x") &&
@@ -378,11 +379,15 @@ export class UniversalPaymentRouter {
         break;
 
       case "FIAT_PAYOUT":
+      case "FIAT_OFFRAMP":
         railResult = await this.fiatPayoutRail.execute(
           intent,
           allocationResult.allocations,
           adminSignature
         );
+        if (railResult && activeRail === "FIAT_OFFRAMP") {
+          railResult.rail = "FIAT_OFFRAMP";
+        }
         break;
 
       default:
