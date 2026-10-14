@@ -30,6 +30,11 @@ describe("BizArc Token Swaps & Universal Fiat Rails Test Suite", () => {
     `);
 
     await DbClient.query(`
+      INSERT INTO dynamic_safe_to_invest (account_id, liquid_cash_usdc, invested_yield_usdc, available_balance_usdc, target_reserve_usdc, safe_to_invest_usdc, time_horizon_seconds, recall_speed_seconds, status)
+      VALUES ('${testAccountId}', '100000.000000', '50000.000000', '150000.000000', '500.000000', '99500.000000', 604800, 60, 'BALANCED');
+    `);
+
+    await DbClient.query(`
       INSERT INTO vendor_master_registry (vendor_id, name, verified_payout_address, verified_by_admin, last_verified_at, change_lock)
       VALUES ('${testVendorId}', 'Gunderson Dettmer LLP', '0x2222222222222222222222222222222222222222', 'CFO_ADMIN', NOW(), TRUE)
       ON CONFLICT (vendor_id) DO UPDATE SET verified_payout_address = EXCLUDED.verified_payout_address;

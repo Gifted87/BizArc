@@ -145,8 +145,9 @@ export class DynamicRecordsService {
       }
     }
 
-    if (liquidRaw === undefined) liquidRaw = 100000000000n; // 100,000.000000 USDC default
-    if (investedRaw === undefined) investedRaw = 50000000000n; // 50,000.000000 USDC default
+    // If no record exists in dynamic_safe_to_invest and no live balance is passed, default to 0 (zero mock tolerance)
+    if (liquidRaw === undefined) liquidRaw = 0n;
+    if (investedRaw === undefined) investedRaw = 0n;
     const availableRaw = liquidRaw + investedRaw;
 
     const liquidStr = this.formatRawToUsdc(liquidRaw);

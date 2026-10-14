@@ -8,6 +8,7 @@ import { PermissionRequestRepo } from "../src/database/repos/permissionRequestRe
 import { VendorMasterRepo } from "../src/database/repos/vendorMasterRepo.js";
 import { MasterJournalRepo } from "../src/database/repos/masterJournalRepo.js";
 import { AuthorizationGate } from "../src/security/authorizationGate.js";
+import { DbClient } from "../src/database/dbClient.js";
 
 test("Twelve API Categories Comprehensive Test Suite", async (t) => {
   const orchestrator = new TreasuryStateMachineOrchestrator();
@@ -779,5 +780,6 @@ test("Twelve API Categories Comprehensive Test Suite", async (t) => {
   });
   } finally {
     await server.stop();
+    await DbClient.closePool();
   }
 });

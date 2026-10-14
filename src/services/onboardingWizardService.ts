@@ -16,6 +16,10 @@ import { VendorPaymentPreferenceRepo } from "../database/repos/vendorPaymentPref
 import { TenantPolicyManager } from "../config/tenantPolicyManager.js";
 import { AccountRole } from "../types/policy.js";
 import { LiabilityCategory } from "../types/accounts.js";
+import { TenantRepo } from "../database/repos/tenantRepo.js";
+import { UserRepo } from "../database/repos/userRepo.js";
+import { TenantMembershipRepo } from "../database/repos/tenantMembershipRepo.js";
+import { PasswordHasher } from "../security/passwordHasher.js";
 
 export interface WizardSession {
   sessionId: string;
@@ -121,11 +125,14 @@ export class OnboardingWizardService implements IOnboardingWizardService {
           throw new Error("STEP_1_VALIDATION: 'companyName' is required.");
         }
         currentDraft.step1_profile = {
+          ...currentDraft.step1_profile,
+          ...stepPayload,
           companyName: stepPayload.companyName,
           taxId: stepPayload.taxId || null,
           jurisdiction: stepPayload.jurisdiction || "US",
           reportingCurrency: stepPayload.reportingCurrency || "USD",
           businessDescription: stepPayload.businessDescription || "Autonomous treasury operations on Arc L1",
+          adminEmail: stepPayload.adminEmail || currentDraft.step1_profile?.adminEmail,
         };
         break;
       }
@@ -458,7 +465,45 @@ export class OnboardingWizardService implements IOnboardingWizardService {
     try {
       await client.query("BEGIN");
 
-      // 1. Provision Company Profile in PostgreSQL
+      // 1. Provision Multi-Tenant IAM Organization in tenants table
+      const existingTenant = await TenantRepo.getTenantById(companyId);
+      if (!existingTenant) {
+        await TenantRepo.createTenant({
+          tenant_id: companyId,
+          slug: profileData.slug || companyId.toLowerCase().replace(/[^a-z0-9_-]/g, "-"),
+          name: profileData.companyName || companyId,
+          legal_name: profileData.legalName || profileData.companyName || companyId,
+          country: profileData.country || "US",
+          status: "ACTIVE",
+          settings: {
+            baseCurrency: "USDC",
+            defaultReserveRatio: 1.20,
+            primaryEntryPath: session.entry_path,
+          },
+        });
+      }
+
+      // 1b. If user credentials provided in draft, provision user and OWNER membership
+      const adminEmail = profileData.adminEmail || profileData.userEmail || draft.userEmail;
+      if (adminEmail) {
+        let user = await UserRepo.getUserByEmail(adminEmail);
+        if (!user) {
+          const rawPass = profileData.adminPassword || "WelcomeBizArc2026!";
+          const hash = await PasswordHasher.hashPassword(rawPass);
+          user = await UserRepo.createUser({
+            email: adminEmail,
+            password_hash: hash,
+            full_name: profileData.adminName || profileData.contactName || "Primary Administrator",
+          });
+        }
+        await TenantMembershipRepo.addMember({
+          tenant_id: companyId,
+          user_id: user.user_id,
+          role: "OWNER",
+        });
+      }
+
+      // 2. Provision Company Profile in PostgreSQL
       const profileRecord: CompanyProfileRecord = {
         company_id: companyId,
         company_name: profileData.companyName,
@@ -478,7 +523,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
       };
       await CompanyProfileRepo.upsertProfile(profileRecord);
 
-      // 2. Provision Step 4 Operating Accounts
+      // 3. Provision Step 4 Operating Accounts
       for (const acc of accounts) {
         const deterministicWallet: `0x${string}` = acc.walletAddress && acc.walletAddress.startsWith("0x")
           ? acc.walletAddress
@@ -505,12 +550,12 @@ export class OnboardingWizardService implements IOnboardingWizardService {
         });
       }
 
-      // 3. Register Vendors & Provision Step 5 Liabilities with Unified Fiat/Crypto Settings
+      // 4. Register Vendors & Provision Step 5 Liabilities with Unified Fiat/Crypto Settings
       for (const liab of liabilities) {
         let bankAccountId: string | undefined;
         const isFiat = liab.preferredPaymentRail === "FIAT_PAYOUT" || !!liab.fiatDetails;
 
-        // 3a. Register Bank Account if Fiat Details provided
+        // 4a. Register Bank Account if Fiat Details provided
         if (isFiat) {
           const fiat = liab.fiatDetails || liab.paymentRailConfig?.beneficiaryBank;
           if (fiat) {
@@ -533,7 +578,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
           }
         }
 
-        // 3b. Determine Verified Payout Address for Vendor Master
+        // 4b. Determine Verified Payout Address for Vendor Master
         let payoutAddr = liab.payoutAddress;
         if (!payoutAddr || typeof payoutAddr !== "string" || !payoutAddr.startsWith("0x") || payoutAddr.length !== 42) {
           payoutAddr = liab.cryptoDetails?.walletAddress || null;
@@ -542,6 +587,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
         // Register in Vendor Master Registry
         await VendorMasterRepo.registerVendor({
           vendor_id: liab.vendorId,
+          company_id: companyId,
           name: liab.vendorName || liab.vendorId,
           verified_payout_address: payoutAddr && payoutAddr.startsWith("0x") ? (payoutAddr as `0x${string}`) : null,
           verified_by_admin: "ONBOARDING_WIZARD",

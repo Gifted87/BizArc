@@ -3,6 +3,7 @@ import { DbClient } from "../dbClient.js";
 export interface VendorBankAccountRecord {
   bank_account_id: string;
   vendor_id: string;
+  company_id?: string;
   account_holder_name: string;
   iban_account_number: string;
   routing_swift: string;
@@ -21,6 +22,7 @@ export interface VendorBankAccountRecord {
 export class VendorBankRepo {
   public static async createBankAccount(params: {
     vendor_id: string;
+    company_id?: string;
     account_holder_name: string;
     iban_account_number: string;
     routing_swift: string;
@@ -33,15 +35,17 @@ export class VendorBankRepo {
     card_token?: string | null;
     card_network?: string | null;
   }): Promise<VendorBankAccountRecord> {
+    const companyId = params.company_id || "default_org";
     const query = `
       INSERT INTO vendor_bank_accounts (
-        vendor_id, account_holder_name, iban_account_number, routing_swift,
+        vendor_id, company_id, account_holder_name, iban_account_number, routing_swift,
         bank_name, bank_country, is_verified, verified_by_admin,
         payment_sub_method, card_last4, card_token, card_network
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (vendor_id, iban_account_number)
       DO UPDATE SET
+        company_id = EXCLUDED.company_id,
         account_holder_name = EXCLUDED.account_holder_name,
         routing_swift = EXCLUDED.routing_swift,
         bank_name = COALESCE(EXCLUDED.bank_name, vendor_bank_accounts.bank_name),
@@ -56,6 +60,7 @@ export class VendorBankRepo {
 
     const values = [
       params.vendor_id,
+      companyId,
       params.account_holder_name,
       params.iban_account_number,
       params.routing_swift,
@@ -73,7 +78,14 @@ export class VendorBankRepo {
     return res.rows[0];
   }
 
-  public static async getBankAccountsByVendor(vendorId: string): Promise<VendorBankAccountRecord[]> {
+  public static async getBankAccountsByVendor(vendorId: string, companyId?: string): Promise<VendorBankAccountRecord[]> {
+    if (companyId) {
+      const res = await DbClient.query(
+        `SELECT * FROM vendor_bank_accounts WHERE vendor_id = $1 AND company_id = $2 ORDER BY created_at DESC;`,
+        [vendorId, companyId]
+      );
+      return res.rows;
+    }
     const res = await DbClient.query(
       `SELECT * FROM vendor_bank_accounts WHERE vendor_id = $1 ORDER BY created_at DESC;`,
       [vendorId]

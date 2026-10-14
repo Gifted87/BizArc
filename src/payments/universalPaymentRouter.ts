@@ -187,7 +187,7 @@ export class UniversalPaymentRouter {
       accountBalances: resolvedBalances,
     });
 
-    if (allocationResult.unmetShortfallUsdc > 0 || allocationResult.requiresHumanApproval) {
+    if ((allocationResult.unmetShortfallUsdc > 0 || allocationResult.requiresHumanApproval) && !adminSignature && !clearanceCode && !sprsRequestId) {
       const sprsId = `SPRS_MOV_${intent.intentId}`;
       await PermissionRequestRepo.createRequest({
         request_id: sprsId,

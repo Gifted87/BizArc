@@ -3,6 +3,7 @@ import { DbClient } from "../dbClient.js";
 export interface FiatPayoutRecord {
   payout_id: string;
   account_id: string;
+  company_id?: string;
   vendor_id: string;
   amount_usdc: number;
   fee_usdc: number;
@@ -24,6 +25,7 @@ export class FiatPayoutRepo {
   public static async createPayoutRecord(params: {
     payout_id: string;
     account_id: string;
+    company_id?: string;
     vendor_id: string;
     amount_usdc: number;
     fee_usdc?: number;
@@ -38,20 +40,22 @@ export class FiatPayoutRepo {
     card_payout_ref?: string | null;
     imad_omad_trace?: string | null;
   }): Promise<FiatPayoutRecord> {
+    const companyId = params.company_id || "default_org";
     const query = `
       INSERT INTO fiat_payout_records (
-        payout_id, account_id, vendor_id, amount_usdc, fee_usdc,
+        payout_id, account_id, company_id, vendor_id, amount_usdc, fee_usdc,
         status, beneficiary_bank_id, circle_payout_ref, burn_tx_hash,
         sprs_request_id, invoice_ref, estimated_arrival,
         sub_method, card_payout_ref, imad_omad_trace
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *;
     `;
 
     const values = [
       params.payout_id,
       params.account_id,
+      companyId,
       params.vendor_id,
       params.amount_usdc,
       params.fee_usdc ?? 0.0,
@@ -80,6 +84,14 @@ export class FiatPayoutRepo {
     const res = await DbClient.query(
       `SELECT * FROM fiat_payout_records WHERE account_id = $1 ORDER BY created_at DESC;`,
       [accountId]
+    );
+    return res.rows;
+  }
+
+  public static async getPayoutsByCompany(companyId: string, limit = 50): Promise<FiatPayoutRecord[]> {
+    const res = await DbClient.query(
+      `SELECT * FROM fiat_payout_records WHERE company_id = $1 ORDER BY created_at DESC LIMIT $2;`,
+      [companyId, limit]
     );
     return res.rows;
   }

@@ -691,3 +691,35 @@ INSERT INTO tenants (tenant_id, slug, name, legal_name, status)
 VALUES ('default_org', 'default-org', 'Default Organization', 'Default Organization Inc.', 'ACTIVE')
 ON CONFLICT (tenant_id) DO NOTHING;
 
+-- ======================================================================================
+-- 29. Multi-Tenant Table Scoping (Vendors, SPRS, Swaps, Fiat Rails, Audit Logs)
+-- ======================================================================================
+ALTER TABLE vendor_master_registry
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+CREATE INDEX IF NOT EXISTS idx_vendor_master_company ON vendor_master_registry(company_id);
+
+ALTER TABLE vendor_bank_accounts
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+CREATE INDEX IF NOT EXISTS idx_vendor_bank_company ON vendor_bank_accounts(company_id);
+
+ALTER TABLE permission_requests
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+CREATE INDEX IF NOT EXISTS idx_permission_company ON permission_requests(company_id);
+
+ALTER TABLE fiat_payout_records
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+CREATE INDEX IF NOT EXISTS idx_fiat_payout_company ON fiat_payout_records(company_id);
+
+ALTER TABLE token_swap_records
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+CREATE INDEX IF NOT EXISTS idx_token_swap_company ON token_swap_records(company_id);
+
+ALTER TABLE fiat_deposit_sessions
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+CREATE INDEX IF NOT EXISTS idx_fiat_deposit_company ON fiat_deposit_sessions(company_id);
+
+ALTER TABLE account_agent_audit_log
+    ADD COLUMN IF NOT EXISTS company_id VARCHAR(64) NOT NULL DEFAULT 'default_org';
+CREATE INDEX IF NOT EXISTS idx_audit_log_company ON account_agent_audit_log(company_id);
+
+

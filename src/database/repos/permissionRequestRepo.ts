@@ -4,6 +4,7 @@ export type PermissionRequestStatus = "PENDING" | "APPROVED" | "REJECTED" | "EXE
 
 export interface PermissionRequestRecord {
   request_id: string;
+  company_id?: string;
   action_type: string;
   reason: string;
   amount_usdc: number;
@@ -18,15 +19,17 @@ export class PermissionRequestRepo {
   public static async createRequest(
     request: PermissionRequestRecord
   ): Promise<PermissionRequestRecord> {
+    const companyId = request.company_id || request.payload?.companyId || "default_org";
     const text = `
       INSERT INTO permission_requests (
-        request_id, action_type, reason, amount_usdc,
+        request_id, company_id, action_type, reason, amount_usdc,
         status, admin_instruction, payload
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *;
     `;
     const values = [
       request.request_id,
+      companyId,
       request.action_type,
       request.reason,
       request.amount_usdc,
@@ -44,10 +47,18 @@ export class PermissionRequestRepo {
   }
 
   public static async getRequestById(
-    requestId: string
+    requestId: string,
+    companyId?: string
   ): Promise<PermissionRequestRecord | null> {
-    const text = `SELECT * FROM permission_requests WHERE request_id = $1 LIMIT 1;`;
-    const result = await DbClient.query(text, [requestId]);
+    let text = `SELECT * FROM permission_requests WHERE request_id = $1`;
+    const values: any[] = [requestId];
+    if (companyId) {
+      text += ` AND (company_id = $2 OR payload->>'companyId' = $2)`;
+      values.push(companyId);
+    }
+    text += ` LIMIT 1;`;
+
+    const result = await DbClient.query(text, values);
     if (result.rows.length === 0) return null;
     const row = result.rows[0];
     return {
@@ -56,9 +67,15 @@ export class PermissionRequestRepo {
     };
   }
 
-  public static async getPendingRequests(): Promise<PermissionRequestRecord[]> {
-    const text = `SELECT * FROM permission_requests WHERE status = 'PENDING' ORDER BY created_at ASC;`;
-    const result = await DbClient.query(text);
+  public static async getPendingRequests(companyId?: string): Promise<PermissionRequestRecord[]> {
+    let text = `SELECT * FROM permission_requests WHERE status = 'PENDING'`;
+    const values: any[] = [];
+    if (companyId) {
+      text += ` AND (company_id = $1 OR payload->>'companyId' = $1)`;
+      values.push(companyId);
+    }
+    text += ` ORDER BY created_at ASC;`;
+    const result = await DbClient.query(text, values);
     return result.rows.map((row) => ({
       ...row,
       amount_usdc: Number(row.amount_usdc),
@@ -114,7 +131,7 @@ export class PermissionRequestRepo {
 
     if (filters?.companyId) {
       values.push(filters.companyId);
-      conditions.push(`payload->>'companyId' = $${values.length}`);
+      conditions.push(`(company_id = $${values.length} OR payload->>'companyId' = $${values.length})`);
     }
 
     if (conditions.length > 0) {

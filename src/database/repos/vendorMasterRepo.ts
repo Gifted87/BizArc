@@ -2,6 +2,7 @@ import { DbClient } from "../dbClient.js";
 
 export interface VendorMasterRecord {
   vendor_id: string;
+  company_id?: string;
   name: string;
   verified_payout_address?: `0x${string}` | string | null;
   verified_by_admin: string;
@@ -13,12 +14,14 @@ export class VendorMasterRepo {
   public static async registerVendor(
     vendor: VendorMasterRecord
   ): Promise<VendorMasterRecord> {
+    const companyId = vendor.company_id || "default_org";
     const text = `
       INSERT INTO vendor_master_registry (
-        vendor_id, name, verified_payout_address, verified_by_admin,
+        vendor_id, company_id, name, verified_payout_address, verified_by_admin,
         last_verified_at, change_lock
-      ) VALUES ($1, $2, $3, $4, $5, $6)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (vendor_id) DO UPDATE SET
+        company_id = EXCLUDED.company_id,
         name = EXCLUDED.name,
         verified_payout_address = COALESCE(EXCLUDED.verified_payout_address, vendor_master_registry.verified_payout_address),
         verified_by_admin = EXCLUDED.verified_by_admin,
@@ -30,6 +33,7 @@ export class VendorMasterRepo {
       : null;
     const values = [
       vendor.vendor_id,
+      companyId,
       vendor.name,
       addressVal,
       vendor.verified_by_admin,
@@ -42,30 +46,56 @@ export class VendorMasterRepo {
   }
 
   public static async getVendorById(
-    vendorId: string
+    vendorId: string,
+    companyId?: string
   ): Promise<VendorMasterRecord | null> {
-    const text = `SELECT * FROM vendor_master_registry WHERE vendor_id = $1 LIMIT 1;`;
-    const result = await DbClient.query<VendorMasterRecord>(text, [vendorId]);
+    let text = `SELECT * FROM vendor_master_registry WHERE vendor_id = $1`;
+    const values: any[] = [vendorId];
+    if (companyId) {
+      text += ` AND company_id = $2`;
+      values.push(companyId);
+    }
+    text += ` LIMIT 1;`;
+    const result = await DbClient.query<VendorMasterRecord>(text, values);
     return result.rows[0] || null;
   }
 
   public static async getVendorByName(
-    name: string
+    name: string,
+    companyId?: string
   ): Promise<VendorMasterRecord | null> {
-    const text = `SELECT * FROM vendor_master_registry WHERE LOWER(name) = LOWER($1) LIMIT 1;`;
-    const result = await DbClient.query<VendorMasterRecord>(text, [name]);
+    let text = `SELECT * FROM vendor_master_registry WHERE LOWER(name) = LOWER($1)`;
+    const values: any[] = [name];
+    if (companyId) {
+      text += ` AND company_id = $2`;
+      values.push(companyId);
+    }
+    text += ` LIMIT 1;`;
+    const result = await DbClient.query<VendorMasterRecord>(text, values);
     return result.rows[0] || null;
   }
 
   public static async getVendorByAddress(
-    payoutAddress: string
+    payoutAddress: string,
+    companyId?: string
   ): Promise<VendorMasterRecord | null> {
-    const text = `SELECT * FROM vendor_master_registry WHERE LOWER(verified_payout_address) = LOWER($1) LIMIT 1;`;
-    const result = await DbClient.query<VendorMasterRecord>(text, [payoutAddress]);
+    let text = `SELECT * FROM vendor_master_registry WHERE LOWER(verified_payout_address) = LOWER($1)`;
+    const values: any[] = [payoutAddress];
+    if (companyId) {
+      text += ` AND company_id = $2`;
+      values.push(companyId);
+    }
+    text += ` LIMIT 1;`;
+    const result = await DbClient.query<VendorMasterRecord>(text, values);
     return result.rows[0] || null;
   }
 
-  public static async getAllVendors(): Promise<VendorMasterRecord[]> {
+  public static async getAllVendors(companyId?: string): Promise<VendorMasterRecord[]> {
+    if (companyId) {
+      const text = `SELECT * FROM vendor_master_registry WHERE company_id = $1 ORDER BY vendor_id ASC;`;
+      const result = await DbClient.query<VendorMasterRecord>(text, [companyId]);
+      return result.rows;
+    }
     const text = `SELECT * FROM vendor_master_registry ORDER BY vendor_id ASC;`;
     const result = await DbClient.query<VendorMasterRecord>(text);
     return result.rows;
@@ -175,7 +205,12 @@ export class VendorMasterRepo {
     throw new Error(`[VendorMasterRepo] No verified payout address found in master registry for vendor '${vendorId}'. Payee substitution policy requires admin registration.`);
   }
 
-  public static async deleteVendor(vendorId: string): Promise<boolean> {
+  public static async deleteVendor(vendorId: string, companyId?: string): Promise<boolean> {
+    if (companyId) {
+      const text = `DELETE FROM vendor_master_registry WHERE vendor_id = $1 AND company_id = $2;`;
+      const res = await DbClient.query(text, [vendorId, companyId]);
+      return (res.rowCount ?? 0) > 0;
+    }
     const text = `DELETE FROM vendor_master_registry WHERE vendor_id = $1;`;
     const res = await DbClient.query(text, [vendorId]);
     return (res.rowCount ?? 0) > 0;

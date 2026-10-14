@@ -735,21 +735,31 @@ export class SystemHttpServer {
     }
 
     if (pathname === "/api/accounts/transfer" && method === "POST") {
-      const body = await this.parseBody(req);
-      const companyId = body.companyId || auth.session?.companyId || "default_org";
-      const fromAccountId = body.fromAccountId;
-      const toAccountId = body.toAccountId;
-      const amountUsdc = Number(body.amountUsdc);
-
-      if (!fromAccountId || !toAccountId || isNaN(amountUsdc) || amountUsdc <= 0) {
-        return this.sendJson(req, res, 400, {
-          success: false,
-          error: "VALIDATION_ERROR",
-          message: "'fromAccountId', 'toAccountId', and a positive 'amountUsdc' are required.",
-        });
-      }
-
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId);
+        const fromAccountId = body.fromAccountId;
+        const toAccountId = body.toAccountId;
+        const amountUsdc = Number(body.amountUsdc);
+
+        if (!fromAccountId || !toAccountId || isNaN(amountUsdc) || amountUsdc <= 0) {
+          return this.sendJson(req, res, 400, {
+            success: false,
+            error: "VALIDATION_ERROR",
+            message: "'fromAccountId', 'toAccountId', and a positive 'amountUsdc' are required.",
+          });
+        }
+
+        const fromAcc = await TreasuryAccountsRepo.getAccountById(fromAccountId);
+        const toAcc = await TreasuryAccountsRepo.getAccountById(toAccountId);
+        if (!fromAcc || (fromAcc.company_id && fromAcc.company_id !== companyId) || !toAcc || (toAcc.company_id && toAcc.company_id !== companyId)) {
+          return this.sendJson(req, res, 403, {
+            success: false,
+            error: "FORBIDDEN_ACCOUNT_ACCESS",
+            message: "Both source and destination accounts must belong to the active tenant.",
+          });
+        }
+
         // Enforce Layer 1 / Layer 2 Authorization
         if (amountUsdc > 500 && !body.adminSignature && !body.clearanceCode) {
           return this.sendJson(req, res, 403, {
@@ -775,6 +785,7 @@ export class SystemHttpServer {
         // Tamper-evident Audit Log
         await AuditLogRepo.appendAuditLog({
           account_id: fromAccountId,
+          company_id: companyId,
           action_type: "INTER_ACCOUNT_TRANSFER",
           amount_usdc: amountUsdc,
           is_autonomous: false,
@@ -799,58 +810,55 @@ export class SystemHttpServer {
           status: "COMPLETED",
         });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     // Account Detail, Update, Deactivation
-    if (pathname.startsWith("/api/accounts/") && !pathname.includes("/fund") && !pathname.includes("/funding-options")) {
+    if (pathname.startsWith("/api/accounts/") && !pathname.includes("/fund") && !pathname.includes("/funding-options") && !pathname.endsWith("/transfer")) {
       const parts = pathname.split("/");
       const accountId = parts[3];
-      const companyId = url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
+      try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const account = await TreasuryAccountsRepo.getAccountById(accountId);
 
-      if (method === "GET") {
-        try {
-          const account =
-            (await TreasuryAccountsRepo.getAccountByIdAndCompany(accountId, companyId)) ||
-            (await TreasuryAccountsRepo.getAccountById(accountId));
+        if (!account || (account.company_id && account.company_id !== companyId)) {
+          return this.sendJson(req, res, 404, { success: false, error: `Account '${accountId}' not found in active tenant.` });
+        }
 
-          if (!account) {
-            return this.sendJson(req, res, 404, { success: false, error: `Account '${accountId}' not found.` });
-          }
-
+        if (method === "GET") {
           let intelligence: any = null;
           try {
             intelligence = await this.accountIntelligenceService.getAccountIntelligence(accountId);
           } catch {}
 
           return this.sendJson(req, res, 200, { success: true, data: { account, intelligence } });
-        } catch (err: any) {
-          return this.sendJson(req, res, 400, { success: false, error: err.message });
         }
-      }
 
-      if (method === "PUT") {
-        const body = await this.parseBody(req);
-        try {
+        if (method === "PUT") {
+          if (auth.role === "AUDITOR_VIEWER") {
+            return this.sendJson(req, res, 403, { success: false, error: "FORBIDDEN: Read-only Auditor role cannot update accounts." });
+          }
+          const body = await this.parseBody(req);
           const updated = await this.accountManagementService.updateAccount(
-            body.companyId || companyId,
+            companyId,
             accountId,
             body
           );
           return this.sendJson(req, res, 200, { success: true, data: updated });
-        } catch (err: any) {
-          return this.sendJson(req, res, 400, { success: false, error: err.message });
         }
-      }
 
-      if (method === "DELETE") {
-        try {
+        if (method === "DELETE") {
+          if (auth.role === "AUDITOR_VIEWER") {
+            return this.sendJson(req, res, 403, { success: false, error: "FORBIDDEN: Read-only Auditor role cannot delete accounts." });
+          }
           const result = await this.accountManagementService.deactivateAccount(companyId, accountId);
           return this.sendJson(req, res, 200, { success: true, message: result.message });
-        } catch (err: any) {
-          return this.sendJson(req, res, 400, { success: false, error: err.message });
         }
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -859,22 +867,25 @@ export class SystemHttpServer {
     // ─────────────────────────────────────────────────────────────────────────────
     if (pathname === "/api/sprs/pending" && method === "GET") {
       try {
-        const pending = await PermissionRequestRepo.getPendingRequests();
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const pending = await PermissionRequestRepo.getPendingRequests(companyId);
         return this.sendJson(req, res, 200, { success: true, count: pending.length, data: pending });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/sprs" && method === "GET") {
-      const status = url.searchParams.get("status") as any;
-      const companyId = url.searchParams.get("companyId") || undefined;
-      const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 100;
       try {
+        const status = url.searchParams.get("status") as any;
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 100;
         const requests = await PermissionRequestRepo.getAllRequests({ status, companyId, limit });
         return this.sendJson(req, res, 200, { success: true, count: requests.length, data: requests });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -882,9 +893,10 @@ export class SystemHttpServer {
       const parts = pathname.split("/");
       const requestId = parts[3];
       try {
-        const sprs = await PermissionRequestRepo.getRequestById(requestId);
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const sprs = await PermissionRequestRepo.getRequestById(requestId, companyId);
         if (!sprs) {
-          return this.sendJson(req, res, 404, { success: false, error: `SPRS Request '${requestId}' not found.` });
+          return this.sendJson(req, res, 404, { success: false, error: `SPRS Request '${requestId}' not found in active tenant.` });
         }
 
         const typedData = AuthorizationGate.getIntentAuthorizationTypedData(
@@ -905,19 +917,20 @@ export class SystemHttpServer {
           typedData,
         });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname.startsWith("/api/sprs/") && pathname.endsWith("/sign") && method === "POST") {
       const parts = pathname.split("/");
       const requestId = parts[3];
-      const body = await this.parseBody(req).catch(() => ({}));
-
       try {
-        const sprs = await PermissionRequestRepo.getRequestById(requestId);
+        const body = await this.parseBody(req).catch(() => ({}));
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+        const sprs = await PermissionRequestRepo.getRequestById(requestId, companyId);
         if (!sprs) {
-          return this.sendJson(req, res, 404, { success: false, error: `SPRS Request '${requestId}' not found.` });
+          return this.sendJson(req, res, 404, { success: false, error: `SPRS Request '${requestId}' not found in active tenant.` });
         }
 
         const adminSignature = await AuthorizationGate.createAdminSignature({
@@ -936,31 +949,37 @@ export class SystemHttpServer {
           adminSignature,
         });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname.startsWith("/api/sprs/") && pathname.endsWith("/decision") && method === "POST") {
       const parts = pathname.split("/");
       const requestId = parts[3];
-      const body = await this.parseBody(req);
-
-      if (body.decision === "APPROVE") {
-        if (auth.role && auth.role !== "MASTER_ADMIN" && auth.role !== "OWNER" && auth.role !== "CFO" && auth.role !== "TREASURY_OFFICER") {
-          return this.sendJson(req, res, 403, {
-            error: "FORBIDDEN",
-            message: "Only CFO, Owner, and Treasury Officer roles have authorization to approve SPRS requests.",
-          });
-        }
-        if (!body.adminSignature) {
-          return this.sendJson(req, res, 400, {
-            error: "SIGNATURE_REQUIRED",
-            message: "A valid cryptographic EIP-712 human adminSignature is required to approve SPRS requests.",
-          });
-        }
-      }
-
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+        const sprs = await PermissionRequestRepo.getRequestById(requestId, companyId);
+        if (!sprs) {
+          return this.sendJson(req, res, 404, { success: false, error: `SPRS Request '${requestId}' not found in active tenant.` });
+        }
+
+        if (body.decision === "APPROVE") {
+          if (auth.role && auth.role !== "MASTER_ADMIN" && auth.role !== "OWNER" && auth.role !== "CFO" && auth.role !== "TREASURY_OFFICER") {
+            return this.sendJson(req, res, 403, {
+              error: "FORBIDDEN",
+              message: "Only CFO, Owner, and Treasury Officer roles have authorization to approve SPRS requests.",
+            });
+          }
+          if (!body.adminSignature) {
+            return this.sendJson(req, res, 400, {
+              error: "SIGNATURE_REQUIRED",
+              message: "A valid cryptographic EIP-712 human adminSignature is required to approve SPRS requests.",
+            });
+          }
+        }
+
         const result = await this.orchestrator.handleSprsDecision({
           requestId,
           decision: body.decision,
@@ -970,7 +989,8 @@ export class SystemHttpServer {
         });
         return this.sendJson(req, res, result.success ? 200 : 400, result);
       } catch (err: any) {
-        return this.sendJson(req, res, 400, {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, {
           error: "AUTHORIZATION_ERROR",
           message: err.message,
         });
@@ -981,13 +1001,15 @@ export class SystemHttpServer {
       const parts = pathname.split("/");
       const requestId = parts[3];
       try {
-        const sprs = await PermissionRequestRepo.getRequestById(requestId);
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const sprs = await PermissionRequestRepo.getRequestById(requestId, companyId);
         if (!sprs) {
-          return this.sendJson(req, res, 404, { success: false, error: `SPRS Request '${requestId}' not found.` });
+          return this.sendJson(req, res, 404, { success: false, error: `SPRS Request '${requestId}' not found in active tenant.` });
         }
         return this.sendJson(req, res, 200, { success: true, data: sprs });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1033,48 +1055,57 @@ export class SystemHttpServer {
     }
 
     if (pathname === "/api/treasury/overview" && method === "GET") {
-      const companyId = url.searchParams.get("companyId") || undefined;
-      const overview = await this.orchestrator.getTreasuryOverview(companyId);
-      const accounts = Array.from(overview);
-      return this.sendJson(req, res, 200, {
-        success: true,
-        overview: {
-          companyId: (overview as any).companyId || companyId || "default_org",
-          totalLiquidUsdc: (overview as any).totalLiquidUsdc || "0.000000",
-          totalInvestedUsyc: (overview as any).totalInvestedUsyc || "0.000000",
-          totalEffectiveUsdc: (overview as any).totalEffectiveUsdc || "0.000000",
-          tripartiteInvariantVerified: true,
-          accounts,
-        },
-      });
+      try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const overview = await this.orchestrator.getTreasuryOverview(companyId);
+        const accounts = Array.from(overview);
+        return this.sendJson(req, res, 200, {
+          success: true,
+          overview: {
+            companyId,
+            totalLiquidUsdc: (overview as any).totalLiquidUsdc || "0.000000",
+            totalInvestedUsyc: (overview as any).totalInvestedUsyc || "0.000000",
+            totalEffectiveUsdc: (overview as any).totalEffectiveUsdc || "0.000000",
+            tripartiteInvariantVerified: true,
+            accounts,
+          },
+        });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
     }
 
     if (pathname === "/api/journal" && method === "GET") {
-      const companyId = url.searchParams.get("companyId") || auth.session?.companyId;
-      const accountId = url.searchParams.get("accountId");
-      const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 100;
       try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const accountId = url.searchParams.get("accountId");
+        const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 100;
         let entries;
         if (accountId) {
+          const acc = await TreasuryAccountsRepo.getAccountById(accountId);
+          if (!acc || (acc.company_id && acc.company_id !== companyId)) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Account '${accountId}' does not belong to active tenant.` });
+          }
           entries = await MasterJournalRepo.getEntriesByAccount(accountId, limit);
-        } else if (companyId) {
-          entries = await MasterJournalRepo.getEntriesByCompany(companyId, limit);
         } else {
-          entries = await MasterJournalRepo.getAllEntries();
+          entries = await MasterJournalRepo.getEntriesByCompany(companyId, limit);
         }
         return this.sendJson(req, res, 200, { success: true, count: entries.length, data: entries });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/journal/latest" && method === "GET") {
-      const companyId = url.searchParams.get("companyId") || undefined;
       try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
         const entry = await MasterJournalRepo.getLatestEntry(companyId);
         return this.sendJson(req, res, 200, { success: true, data: entry });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1088,15 +1119,24 @@ export class SystemHttpServer {
     }
 
     if (pathname === "/api/audit-logs" && method === "GET") {
-      const accountId = url.searchParams.get("accountId");
-      const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 50;
       try {
-        const logs = accountId
-          ? await AuditLogRepo.getAuditLogsByAccount(accountId, limit)
-          : await AuditLogRepo.getAllAuditLogs(limit);
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const accountId = url.searchParams.get("accountId");
+        const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 50;
+        let logs;
+        if (accountId) {
+          const acc = await TreasuryAccountsRepo.getAccountById(accountId);
+          if (!acc || (acc.company_id && acc.company_id !== companyId)) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Account '${accountId}' does not belong to active tenant.` });
+          }
+          logs = await AuditLogRepo.getAuditLogsByAccount(accountId, limit);
+        } else {
+          logs = await AuditLogRepo.getAuditLogsByCompany(companyId, limit);
+        }
         return this.sendJson(req, res, 200, { success: true, count: logs.length, data: logs });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1168,46 +1208,68 @@ export class SystemHttpServer {
     if (pathname.startsWith("/api/liabilities/") && !pathname.endsWith("/payment-method") && !pathname.endsWith("/dispute")) {
       const parts = pathname.split("/");
       const liabilityId = parts[3];
-      const companyId = url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
 
       if (method === "GET") {
         try {
+          const companyId = resolveTenantId(url.searchParams.get("companyId"));
           const liability = await LiabilityRepo.getLiabilityById(liabilityId);
           if (!liability) {
             return this.sendJson(req, res, 404, { success: false, error: `Liability '${liabilityId}' not found.` });
           }
+          if (liability.company_id && liability.company_id !== companyId) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Liability '${liabilityId}' does not belong to active tenant.` });
+          }
           return this.sendJson(req, res, 200, { success: true, data: liability });
         } catch (err: any) {
-          return this.sendJson(req, res, 400, { success: false, error: err.message });
+          const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+          return this.sendJson(req, res, status, { success: false, error: err.message });
         }
       }
 
       if (method === "PUT") {
-        const body = await this.parseBody(req);
         try {
+          const body = await this.parseBody(req);
+          const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+          const liability = await LiabilityRepo.getLiabilityById(liabilityId);
+          if (!liability) {
+            return this.sendJson(req, res, 404, { success: false, error: `Liability '${liabilityId}' not found.` });
+          }
+          if (liability.company_id && liability.company_id !== companyId) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Liability '${liabilityId}' does not belong to active tenant.` });
+          }
           const updated = await this.liabilityManagementService.updateLiability(
-            body.companyId || companyId,
+            companyId,
             liabilityId,
             body
           );
           return this.sendJson(req, res, 200, { success: true, data: updated });
         } catch (err: any) {
-          return this.sendJson(req, res, 400, { success: false, error: err.message });
+          const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+          return this.sendJson(req, res, status, { success: false, error: err.message });
         }
       }
 
       if (method === "DELETE") {
-        const body = await this.parseBody(req).catch(() => ({}));
-        const adminInstruction = body.adminInstruction || body.reason || "Cancelled via REST API";
         try {
+          const body = await this.parseBody(req).catch(() => ({}));
+          const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+          const liability = await LiabilityRepo.getLiabilityById(liabilityId);
+          if (!liability) {
+            return this.sendJson(req, res, 404, { success: false, error: `Liability '${liabilityId}' not found.` });
+          }
+          if (liability.company_id && liability.company_id !== companyId) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Liability '${liabilityId}' does not belong to active tenant.` });
+          }
+          const adminInstruction = body.adminInstruction || body.reason || "Cancelled via REST API";
           const cancelled = await this.liabilityManagementService.cancelLiability(
-            body.companyId || companyId,
+            companyId,
             liabilityId,
             adminInstruction
           );
           return this.sendJson(req, res, 200, { success: true, data: cancelled });
         } catch (err: any) {
-          return this.sendJson(req, res, 400, { success: false, error: err.message });
+          const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+          return this.sendJson(req, res, status, { success: false, error: err.message });
         }
       }
     }
@@ -1216,10 +1278,15 @@ export class SystemHttpServer {
       const parts = pathname.split("/");
       const liabilityId = parts[3];
       if (method === "POST") {
-        const body = await this.parseBody(req);
         try {
+          const body = await this.parseBody(req);
+          const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+          const liability = await LiabilityRepo.getLiabilityById(liabilityId);
+          if (liability && liability.company_id && liability.company_id !== companyId) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Liability '${liabilityId}' does not belong to active tenant.` });
+          }
           const result = await this.liabilitySettingsService.configurePaymentMethod({
-            companyId: body.companyId || auth.session?.companyId || "default_org",
+            companyId,
             vendorId: body.vendorId,
             liabilityId,
             preferredRail: body.preferredRail,
@@ -1230,12 +1297,17 @@ export class SystemHttpServer {
           });
           return this.sendJson(req, res, 200, { success: true, data: result });
         } catch (err: any) {
-          return this.sendJson(req, res, 400, { success: false, error: err.message });
+          const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+          return this.sendJson(req, res, status, { success: false, error: err.message });
         }
       } else if (method === "GET") {
-        const companyId = url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
-        const vendorId = url.searchParams.get("vendorId") || liabilityId;
         try {
+          const companyId = resolveTenantId(url.searchParams.get("companyId"));
+          const vendorId = url.searchParams.get("vendorId") || liabilityId;
+          const liability = await LiabilityRepo.getLiabilityById(liabilityId);
+          if (liability && liability.company_id && liability.company_id !== companyId) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Liability '${liabilityId}' does not belong to active tenant.` });
+          }
           const result = await this.liabilitySettingsService.getPaymentMethod({
             companyId,
             vendorId,
@@ -1243,7 +1315,8 @@ export class SystemHttpServer {
           });
           return this.sendJson(req, res, 200, { success: true, data: result });
         } catch (err: any) {
-          return this.sendJson(req, res, 400, { success: false, error: err.message });
+          const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+          return this.sendJson(req, res, status, { success: false, error: err.message });
         }
       }
     }
@@ -1253,18 +1326,22 @@ export class SystemHttpServer {
     // ─────────────────────────────────────────────────────────────────────────────
     if (pathname === "/api/vendors" && method === "GET") {
       try {
-        const vendors = await VendorMasterRepo.getAllVendors();
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const vendors = await VendorMasterRepo.getAllVendors(companyId);
         return this.sendJson(req, res, 200, { success: true, count: vendors.length, data: vendors });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/vendors" && method === "POST") {
-      const body = await this.parseBody(req);
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
         const vendor = await VendorMasterRepo.registerVendor({
           vendor_id: body.vendorId,
+          company_id: companyId,
           name: body.name,
           verified_payout_address: body.verifiedPayoutAddress || body.payoutAddress,
           verified_by_admin: body.verifiedByAdmin || auth.session?.operatorId || "ADMIN_API",
@@ -1276,6 +1353,7 @@ export class SystemHttpServer {
         if (body.bankDetails) {
           bankAccount = await VendorBankRepo.createBankAccount({
             vendor_id: body.vendorId,
+            company_id: companyId,
             account_holder_name: body.bankDetails.accountHolderName || body.name,
             iban_account_number: body.bankDetails.ibanAccountNumber,
             routing_swift: body.bankDetails.routingSwift,
@@ -1289,7 +1367,8 @@ export class SystemHttpServer {
 
         return this.sendJson(req, res, 201, { success: true, data: { vendor, bankAccount } });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1297,22 +1376,29 @@ export class SystemHttpServer {
       const parts = pathname.split("/");
       const vendorId = parts[3];
       try {
-        const vendor = await VendorMasterRepo.getVendorById(vendorId);
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const vendor = await VendorMasterRepo.getVendorById(vendorId, companyId);
         if (!vendor) {
-          return this.sendJson(req, res, 404, { success: false, error: `Vendor '${vendorId}' not found.` });
+          return this.sendJson(req, res, 404, { success: false, error: `Vendor '${vendorId}' not found for tenant.` });
         }
-        const bankAccounts = await VendorBankRepo.getBankAccountsByVendor(vendorId);
+        const bankAccounts = await VendorBankRepo.getBankAccountsByVendor(vendorId, companyId);
         return this.sendJson(req, res, 200, { success: true, data: { vendor, bankAccounts } });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname.startsWith("/api/vendors/") && method === "PUT") {
       const parts = pathname.split("/");
       const vendorId = parts[3];
-      const body = await this.parseBody(req);
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+        const vendor = await VendorMasterRepo.getVendorById(vendorId, companyId);
+        if (!vendor) {
+          return this.sendJson(req, res, 404, { success: false, error: `Vendor '${vendorId}' not found for tenant.` });
+        }
         const result = await VendorMasterRepo.updatePayoutAddress({
           vendorId,
           newAddress: body.newAddress,
@@ -1327,6 +1413,7 @@ export class SystemHttpServer {
         if (body.bankDetails) {
           await VendorBankRepo.createBankAccount({
             vendor_id: vendorId,
+            company_id: companyId,
             account_holder_name: body.bankDetails.accountHolderName || vendorId,
             iban_account_number: body.bankDetails.ibanAccountNumber,
             routing_swift: body.bankDetails.routingSwift,
@@ -1338,10 +1425,11 @@ export class SystemHttpServer {
           });
         }
 
-        const updated = await VendorMasterRepo.getVendorById(vendorId);
+        const updated = await VendorMasterRepo.getVendorById(vendorId, companyId);
         return this.sendJson(req, res, 200, { success: true, data: updated });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1349,10 +1437,16 @@ export class SystemHttpServer {
       const parts = pathname.split("/");
       const vendorId = parts[3];
       try {
-        const deleted = await VendorMasterRepo.deleteVendor(vendorId);
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const vendor = await VendorMasterRepo.getVendorById(vendorId, companyId);
+        if (!vendor) {
+          return this.sendJson(req, res, 404, { success: false, error: `Vendor '${vendorId}' not found for tenant.` });
+        }
+        const deleted = await VendorMasterRepo.deleteVendor(vendorId, companyId);
         return this.sendJson(req, res, 200, { success: true, deleted, vendorId });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1360,21 +1454,32 @@ export class SystemHttpServer {
     // CATEGORY 6: YIELD, SWEEPS & LIQUIDITY MANAGEMENT APIS
     // ─────────────────────────────────────────────────────────────────────────────
     if (pathname === "/api/yield/sweep" && method === "POST") {
-      const body = await this.parseBody(req);
-      const accountId = body.accountId || "acc_primary";
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId);
+        const accountId = body.accountId || "acc_primary";
+        const acc = await TreasuryAccountsRepo.getAccountById(accountId);
+        if (!acc || (acc.company_id && acc.company_id !== companyId)) {
+          return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Account '${accountId}' does not belong to active tenant.` });
+        }
         const result = await this.orchestrator.yieldMachine.recalculateForAccount(accountId);
         return this.sendJson(req, res, 200, { success: true, accountId, result });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/yield/recall" && method === "POST") {
-      const body = await this.parseBody(req);
-      const accountId = body.accountId || "acc_primary";
-      const amountUsdc = Number(body.amountUsdc || 0);
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId);
+        const accountId = body.accountId || "acc_primary";
+        const acc = await TreasuryAccountsRepo.getAccountById(accountId);
+        if (!acc || (acc.company_id && acc.company_id !== companyId)) {
+          return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Account '${accountId}' does not belong to active tenant.` });
+        }
+        const amountUsdc = Number(body.amountUsdc || 0);
         const result = await this.orchestrator.yieldMachine.handleBalanceMutation({
           accountId,
           amountUsdc: -amountUsdc,
@@ -1384,16 +1489,15 @@ export class SystemHttpServer {
         });
         return this.sendJson(req, res, 200, { success: true, accountId, amountUsdc, status: "RECALLED", result });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/yield/performance" && method === "GET") {
-      const companyId = url.searchParams.get("companyId") || auth.session?.companyId;
       try {
-        const accounts = companyId
-          ? await TreasuryAccountsRepo.getAccountsByCompany(companyId)
-          : await TreasuryAccountsRepo.getAllAccounts();
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const accounts = await TreasuryAccountsRepo.getAccountsByCompany(companyId);
 
         let totalInvestedUsyc = 0;
         const positions = [];
@@ -1409,17 +1513,22 @@ export class SystemHttpServer {
           });
         }
 
+        const policies = await TenantPolicyManager.getInstance().getActiveProfile(companyId);
+        const annualYieldRate = (policies as any).investment_rules?.target_annual_yield_rate || "5.15%";
+
         return this.sendJson(req, res, 200, {
           success: true,
           data: {
+            companyId,
             totalInvestedUsyc: totalInvestedUsyc.toFixed(6),
-            annualYieldRate: "5.15%",
+            annualYieldRate,
             compoundingFrequency: "DAILY_REINVESTED",
             positions,
           },
         });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1604,11 +1713,11 @@ export class SystemHttpServer {
     // CATEGORY 9: ERP SYNCHRONIZATION & MODEL CONTEXT PROTOCOL (MCP) APIS
     // ─────────────────────────────────────────────────────────────────────────────
     if (pathname === "/api/integrations/erp/sync" && method === "POST") {
-      const body = await this.parseBody(req);
-      const companyId = body.companyId || auth.session?.companyId || "default_org";
-      const systemType = body.systemType || "ERPNEXT";
-
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+        const systemType = body.systemType || "ERPNEXT";
+
         const checkpoint = await ErpSyncRepo.recordSyncCheckpoint({
           companyId,
           systemType,
@@ -1628,24 +1737,26 @@ export class SystemHttpServer {
           status: "SYNCED",
         });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/integrations/erp/status" && method === "GET") {
-      const companyId = url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
       try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
         const checkpoint = await ErpSyncRepo.getLatestSyncCheckpoint(companyId);
         return this.sendJson(req, res, 200, { success: true, status: checkpoint || { status: "DISCONNECTED" } });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/integrations/mcp/extract" && method === "POST") {
-      const body = await this.parseBody(req);
-      const companyId = body.companyId || auth.session?.companyId || "default_org";
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
         const connector = new McpAppConnector({
           companyId,
           googleAppsConnected: true,
@@ -1654,7 +1765,8 @@ export class SystemHttpServer {
         const mcpData = await connector.aggregateAllCompanyAppData();
         return this.sendJson(req, res, 200, { success: true, companyId, extracted: mcpData });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1704,19 +1816,20 @@ export class SystemHttpServer {
     }
 
     if (pathname === "/api/governance/policies" && method === "GET") {
-      const companyId = url.searchParams.get("companyId") || auth.session?.companyId || "default_org";
       try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
         const policies = await TenantPolicyManager.getInstance().getActiveProfile(companyId);
         return this.sendJson(req, res, 200, { success: true, companyId, policies });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname === "/api/governance/policies" && method === "PUT") {
-      const body = await this.parseBody(req);
-      const companyId = body.companyId || auth.session?.companyId || "default_org";
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
         const updated = await TenantPolicyManager.getInstance().mutatePolicy(companyId, (current) => ({
           ...current,
           spending_limits: body.spendingLimits || body.spending_limits || current.spending_limits,
@@ -1725,7 +1838,8 @@ export class SystemHttpServer {
         }));
         return this.sendJson(req, res, 200, { success: true, companyId, policies: updated });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1757,11 +1871,19 @@ export class SystemHttpServer {
     }
 
     if (pathname === "/api/disbursals/manual" && method === "POST") {
-      const body = await this.parseBody(req);
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+        const sourceAccountId = body.sourceAccountId || body.accountId;
+        if (sourceAccountId) {
+          const acc = await TreasuryAccountsRepo.getAccountById(sourceAccountId);
+          if (!acc || (acc.company_id && acc.company_id !== companyId)) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Source account '${sourceAccountId}' does not belong to active tenant.` });
+          }
+        }
         const result = await this.manualDisbursalService.executeManualDisbursal({
-          companyId: body.companyId || auth.session?.companyId || "default_org",
-          sourceAccountId: body.sourceAccountId || body.accountId,
+          companyId,
+          sourceAccountId,
           vendorId: body.vendorId,
           vendorName: body.vendorName || body.vendorId,
           amountUsdc: Number(body.amountUsdc),
@@ -1777,7 +1899,8 @@ export class SystemHttpServer {
         });
         return this.sendJson(req, res, result.success ? 200 : 400, result);
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
@@ -1785,18 +1908,29 @@ export class SystemHttpServer {
       const parts = pathname.split("/");
       const accountId = parts[3];
       try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const acc = await TreasuryAccountsRepo.getAccountById(accountId);
+        if (!acc || (acc.company_id && acc.company_id !== companyId)) {
+          return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Account '${accountId}' does not belong to active tenant.` });
+        }
         const result = await this.accountFundingService.getFundingOptions(accountId);
         return this.sendJson(req, res, 200, { success: true, data: result });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 
     if (pathname.startsWith("/api/accounts/") && pathname.endsWith("/fund") && method === "POST") {
       const parts = pathname.split("/");
       const accountId = parts[3];
-      const body = await this.parseBody(req);
       try {
+        const body = await this.parseBody(req);
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+        const acc = await TreasuryAccountsRepo.getAccountById(accountId);
+        if (!acc || (acc.company_id && acc.company_id !== companyId)) {
+          return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Account '${accountId}' does not belong to active tenant.` });
+        }
         const result = await this.accountFundingService.initiateFundingSession({
           accountId,
           method: body.method,
@@ -1807,7 +1941,8 @@ export class SystemHttpServer {
         });
         return this.sendJson(req, res, 200, { success: true, data: result });
       } catch (err: any) {
-        return this.sendJson(req, res, 400, { success: false, error: err.message });
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
       }
     }
 

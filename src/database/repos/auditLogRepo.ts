@@ -3,6 +3,7 @@ import { DbClient } from "../dbClient.js";
 export interface AccountAuditLogRecord {
   log_id?: string;
   account_id: string;
+  company_id?: string;
   timestamp?: Date;
   action_type: string;
   amount_usdc: number;
@@ -20,16 +21,18 @@ export class AuditLogRepo {
   public static async appendAuditLog(
     entry: AccountAuditLogRecord
   ): Promise<AccountAuditLogRecord> {
+    const companyId = entry.company_id || "default_org";
     const text = `
       INSERT INTO account_agent_audit_log (
-        account_id, action_type, amount_usdc, is_autonomous,
+        account_id, company_id, action_type, amount_usdc, is_autonomous,
         permission_request_id, tx_hash, counterparty_address,
         reason, pre_state_snapshot, post_state_snapshot, actor_agent
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *;
     `;
     const values = [
       entry.account_id,
+      companyId,
       entry.action_type,
       entry.amount_usdc,
       entry.is_autonomous,
@@ -61,6 +64,23 @@ export class AuditLogRepo {
       LIMIT $2;
     `;
     const result = await DbClient.query(text, [accountId, limit]);
+    return result.rows.map((row) => ({
+      ...row,
+      amount_usdc: Number(row.amount_usdc),
+    }));
+  }
+
+  public static async getAuditLogsByCompany(
+    companyId: string,
+    limit = 50
+  ): Promise<AccountAuditLogRecord[]> {
+    const text = `
+      SELECT * FROM account_agent_audit_log
+      WHERE company_id = $1
+      ORDER BY timestamp DESC
+      LIMIT $2;
+    `;
+    const result = await DbClient.query(text, [companyId, limit]);
     return result.rows.map((row) => ({
       ...row,
       amount_usdc: Number(row.amount_usdc),

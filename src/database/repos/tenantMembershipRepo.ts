@@ -170,4 +170,14 @@ export class TenantMembershipRepo {
     const result = await DbClient.query<{ count: number }>(text, [tenantId]);
     return result.rows[0]?.count ?? 0;
   }
+
+  public static async listUserMemberships(userId: string): Promise<TenantMembershipRecord[]> {
+    const text = `
+      SELECT * FROM tenant_memberships
+      WHERE user_id = $1 AND status = 'ACTIVE'
+      ORDER BY joined_at ASC;
+    `;
+    const result = await DbClient.query<TenantMembershipRecord>(text, [userId]);
+    return result.rows;
+  }
 }

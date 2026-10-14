@@ -4,9 +4,10 @@ import crypto from "node:crypto";
 import { SystemHttpServer, DEFAULT_API_KEY } from "../src/ingress/systemHttpServer.js";
 import { TreasuryStateMachineOrchestrator } from "../src/orchestration/treasuryStateMachineOrchestrator.js";
 import { TreasuryAccountsRepo } from "../src/database/repos/treasuryAccountsRepo.js";
-import { TenantRepo } from "../database/repos/tenantRepo.js";
-import { UserRepo } from "../database/repos/userRepo.js";
-import { TenantMembershipRepo } from "../database/repos/tenantMembershipRepo.js";
+import { TenantRepo } from "../src/database/repos/tenantRepo.js";
+import { UserRepo } from "../src/database/repos/userRepo.js";
+import { TenantMembershipRepo } from "../src/database/repos/tenantMembershipRepo.js";
+import { DbClient } from "../src/database/dbClient.js";
 
 test("Multi-Tenant Enterprise IAM, Teams, RBAC & Isolation Test Suite", async (t) => {
   const orchestrator = new TreasuryStateMachineOrchestrator();
@@ -285,6 +286,60 @@ test("Multi-Tenant Enterprise IAM, Teams, RBAC & Isolation Test Suite", async (t
         token: cfoToken,
       });
       assert.strictEqual(crossPostRes.status, 403);
+
+      // CFO tries to access secondary tenant journal:
+      const crossJournalRes = await apiRequest(`/api/journal?companyId=${secondaryTenantId}`, {
+        token: cfoToken,
+      });
+      assert.strictEqual(crossJournalRes.status, 403);
+
+      // CFO tries to access secondary tenant audit logs:
+      const crossAuditRes = await apiRequest(`/api/audit-logs?companyId=${secondaryTenantId}`, {
+        token: cfoToken,
+      });
+      assert.strictEqual(crossAuditRes.status, 403);
+
+      // CFO tries to query secondary tenant SPRs:
+      const crossSprsRes = await apiRequest(`/api/sprs/pending?companyId=${secondaryTenantId}`, {
+        token: cfoToken,
+      });
+      assert.strictEqual(crossSprsRes.status, 403);
+
+      // CFO tries to query secondary tenant governance policies:
+      const crossPolRes = await apiRequest(`/api/governance/policies?companyId=${secondaryTenantId}`, {
+        token: cfoToken,
+      });
+      assert.strictEqual(crossPolRes.status, 403);
+
+      // CFO tries to mutate secondary tenant governance policies:
+      const crossPolPutRes = await apiRequest("/api/governance/policies", {
+        method: "PUT",
+        body: {
+          companyId: secondaryTenantId,
+          spendingLimits: { daily_hard_cap_usdc: 99999999 },
+        },
+        token: cfoToken,
+      });
+      assert.strictEqual(crossPolPutRes.status, 403);
+
+      // CFO tries to register vendor in secondary tenant:
+      const crossVendorPost = await apiRequest("/api/vendors", {
+        method: "POST",
+        body: {
+          companyId: secondaryTenantId,
+          vendorId: `vnd_${testRunId}_cross`,
+          name: "Attacker Vendor",
+          verifiedPayoutAddress: "0x1111111111111111111111111111111111111111",
+        },
+        token: cfoToken,
+      });
+      assert.strictEqual(crossVendorPost.status, 403);
+
+      // CFO tries to list vendors of secondary tenant:
+      const crossVendorList = await apiRequest(`/api/vendors?companyId=${secondaryTenantId}`, {
+        token: cfoToken,
+      });
+      assert.strictEqual(crossVendorList.status, 403);
     });
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -388,7 +443,95 @@ test("Multi-Tenant Enterprise IAM, Teams, RBAC & Isolation Test Suite", async (t
       assert.strictEqual(meAfterLogout.status, 401);
       assert.strictEqual(meAfterLogout.data.error, "UNAUTHORIZED");
     });
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 11. ONBOARDING WIZARD IAM INTEGRATION: Activation provisions Tenant & Owner
+    // ─────────────────────────────────────────────────────────────────────────────
+    await t.test("11. Onboarding Wizard: Organization activation provisions Tenant, User and OWNER membership", async () => {
+      // 11a. Start wizard session
+      const startRes = await apiRequest("/api/onboarding/session", {
+        method: "POST",
+        body: {
+          companyId: `org_wizard_${testRunId}`,
+          entryPath: "MANUAL",
+          companyName: `New Enterprise ${testRunId}`,
+          adminEmail: `founder_wizard_${testRunId}@newenterprise.com`,
+        },
+        token: ownerToken,
+      });
+      assert.strictEqual(startRes.status, 200);
+      assert.strictEqual(startRes.data.success, true);
+      const sessionId = startRes.data.instanceId;
+
+      // 11b. Submit step 1 (Company profile)
+      const stepRes = await apiRequest("/api/onboarding/step", {
+        method: "POST",
+        body: {
+          sessionId,
+          step: 1,
+          payload: {
+            companyName: `New Enterprise ${testRunId}`,
+            legalName: `New Enterprise ${testRunId} Inc`,
+            jurisdiction: "Delaware, USA",
+            adminEmail: `founder_wizard_${testRunId}@newenterprise.com`,
+          },
+        },
+        token: ownerToken,
+      });
+      assert.strictEqual(stepRes.status, 200);
+
+      // 11b-2. Submit step 4 (Operating accounts)
+      const step4Res = await apiRequest("/api/onboarding/step", {
+        method: "POST",
+        body: {
+          sessionId,
+          step: 4,
+          payload: {
+            accounts: [
+              {
+                accountId: `acc_wiz_${testRunId}_ops`,
+                name: "Primary Operating Account",
+                role: "OPEX_DEV",
+                minOperatingFloorUsdc: 1000,
+                safetyBufferRatio: 1.25,
+                dailyCapUsdc: 5000,
+                authorizedCategories: ["CLOUD_COMPUTE", "DEV_TOOLS"],
+                maxAutonomousSweepUsdc: 2500,
+                excludeFromWaterfall: false,
+              },
+            ],
+          },
+        },
+        token: ownerToken,
+      });
+      assert.strictEqual(step4Res.status, 200);
+
+      // 11c. Activate organization
+      const actRes = await apiRequest("/api/onboarding/activate", {
+        method: "POST",
+        body: { sessionId },
+        token: ownerToken,
+      });
+      assert.strictEqual(actRes.status, 200);
+      assert.strictEqual(actRes.data.success, true);
+      const activatedCompanyId = actRes.data.data?.companyId || actRes.data.companyId;
+      assert.ok(activatedCompanyId, "activatedCompanyId must be defined");
+
+      // 11d. Verify Database rows in tenants, users, and tenant_memberships
+      const tenantRow = await TenantRepo.getTenantById(activatedCompanyId);
+      assert.ok(tenantRow, "Tenant record must exist in DB");
+      assert.strictEqual(tenantRow.tenant_id, activatedCompanyId);
+
+      const userRow = await UserRepo.getUserByEmail(`founder_wizard_${testRunId}@newenterprise.com`);
+      assert.ok(userRow, "User record must be provisioned in DB");
+
+      const memberships = await TenantMembershipRepo.listUserMemberships(userRow.user_id);
+      const activeMembership = memberships.find((m) => m.tenant_id === activatedCompanyId);
+      assert.ok(activeMembership, "User must be member of newly activated tenant");
+      assert.strictEqual(activeMembership.role, "OWNER");
+    });
   } finally {
     await server.stop();
+    await DbClient.closePool();
   }
 });
