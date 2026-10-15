@@ -4,6 +4,9 @@ import http from "node:http";
 import { SystemHttpServer } from "../src/ingress/systemHttpServer.js";
 import { AuthorizationGate } from "../src/security/authorizationGate.js";
 import { privateKeyToAccount } from "viem/accounts";
+import { PermissionRequestRepo } from "../src/database/repos/permissionRequestRepo.js";
+import { AuditLogRepo } from "../src/database/repos/auditLogRepo.js";
+import { TreasuryAccountsRepo } from "../src/database/repos/treasuryAccountsRepo.js";
 
 function makeRequest(
   port: number,
@@ -55,7 +58,20 @@ test("UI API Catalog Compliance & Remediation Test Suite", async (t) => {
   });
 
   let sessionToken = "";
+  let activeTenantId = "default_org";
   const testEmail = `ui_tester_${Date.now()}@bizarc.io`;
+
+  await TreasuryAccountsRepo.upsertAccount({
+    account_id: "acc_primary",
+    company_id: "default_org",
+    name: "Primary Operating Account",
+    role: "OPERATING",
+    wallet_address: "0x1111111111111111111111111111111111111111",
+    chain_id: 5042002,
+    min_operating_floor_usdc: 5000,
+    safety_buffer_ratio: 0.2,
+    is_active: true,
+  });
 
   await t.test("1. OPTIONS Preflight: RFC 9110 Compliant 204 with ZERO Body & PATCH Support", async () => {
     const res = await makeRequest(port, "/api/liabilities/lib_test_123", "OPTIONS", undefined, {
@@ -161,6 +177,20 @@ test("UI API Catalog Compliance & Remediation Test Suite", async (t) => {
     assert.equal(sessionRes.status, 200);
     assert.equal(sessionRes.body.success, true);
     assert.equal(sessionRes.body.user.email, testEmail);
+    activeTenantId = sessionRes.body.tenant?.tenant_id || sessionRes.body.user?.tenant_id || "default_org";
+    assert.ok(activeTenantId);
+
+    await TreasuryAccountsRepo.upsertAccount({
+      account_id: "acc_primary",
+      company_id: activeTenantId,
+      name: "Primary Operating Account",
+      role: "OPERATING",
+      wallet_address: "0x1111111111111111111111111111111111111111",
+      chain_id: 5042002,
+      min_operating_floor_usdc: 5000,
+      safety_buffer_ratio: 0.2,
+      is_active: true,
+    });
   });
 
   await t.test("7. SIWE (Sign-In with Ethereum): Nonce & Signature Verification", async () => {
@@ -182,6 +212,7 @@ test("UI API Catalog Compliance & Remediation Test Suite", async (t) => {
     const verifyRes = await makeRequest(port, "/api/auth/wallet/verify", "POST", {
       address,
       signature,
+      message: nonceRes.body.message,
     });
 
     assert.equal(verifyRes.status, 200);
@@ -290,5 +321,185 @@ test("UI API Catalog Compliance & Remediation Test Suite", async (t) => {
 
     assert.equal(badRes.status, 400);
     assert.ok(badRes.body.error.includes("INVALID_DECIMAL"));
+  });
+
+  await t.test("13. Endpoint 1: /api/sprs/:id/typed-data EIP-712 Typed Data Generator", async () => {
+    // Create an SPRS permission request fixture
+    const sprs = await PermissionRequestRepo.createRequest({
+      request_id: `SPRS_TEST_${Date.now()}`,
+      company_id: activeTenantId,
+      action_type: "DISBURSAL",
+      amount_usdc: 5000,
+      status: "PENDING",
+      risk_level: "HIGH" as any,
+      requires_officer_signature: true as any,
+      reason: "High value contractor invoice exceeding threshold",
+      payload: {
+        accountId: "acc_primary",
+        actionType: "DISBURSAL",
+        nonce: 1,
+        deadline: Math.floor(Date.now() / 1000) + 3600,
+      },
+    });
+
+    const res = await makeRequest(port, `/api/sprs/${sprs.request_id}/typed-data`, "GET", undefined, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.requestId, sprs.request_id);
+    assert.ok(res.body.typedData);
+    assert.ok(res.body.domain);
+    assert.equal(res.body.domain.name, "BizArc Authorization Gate");
+    assert.equal(res.body.primaryType, "ActionAuthorization");
+    assert.ok(Array.isArray(res.body.types.ActionAuthorization));
+    assert.ok(Array.isArray(res.body.signerAllowlist));
+    assert.ok(res.body.signerAllowlist.length > 0);
+    assert.ok(res.body.signerAllowlist[0].startsWith("0x"));
+  });
+
+  await t.test("14. Endpoint 2: /api/treasury/yield/moves Yield Actions & Suppression Reasons Log", async () => {
+    // Record sample yield moves in audit log
+    await AuditLogRepo.appendAuditLog({
+      account_id: "acc_primary",
+      company_id: activeTenantId,
+      action_type: "AUTONOMOUS_SWEEP",
+      amount_usdc: 1500,
+      is_autonomous: true,
+      reason: "Operational surplus above required reserve; swept to USYC Yield Vault",
+      pre_state_snapshot: { liquid: 20000 },
+      post_state_snapshot: { liquid: 18500, yield: 1500 },
+      actor_agent: "TreasurySentinelService",
+    });
+
+    await AuditLogRepo.appendAuditLog({
+      account_id: "acc_primary",
+      company_id: activeTenantId,
+      action_type: "SWEEP_SUPPRESSED",
+      amount_usdc: 0,
+      is_autonomous: true,
+      reason: "Surplus $250 is below hysteresis threshold $500 USDC. Micro-sweep suppressed.",
+      pre_state_snapshot: {},
+      post_state_snapshot: {},
+      actor_agent: "TreasurySentinelService",
+    });
+
+    const res = await makeRequest(port, "/api/treasury/yield/moves", "GET", undefined, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.ok(Array.isArray(res.body.moves));
+    assert.ok(res.body.moves.length >= 2);
+    assert.ok(res.body.moves.some((m: any) => m.actionType === "AUTONOMOUS_SWEEP"));
+    assert.ok(res.body.moves.some((m: any) => m.actionType === "SWEEP_SUPPRESSED"));
+    assert.ok(res.body.shields);
+    assert.equal(res.body.shields.hysteresisShieldActive, true);
+    assert.equal(typeof res.body.shields.minSweepAmountUsdc, "number");
+  });
+
+  await t.test("15. Endpoint 3: /api/payments Unified Multi-Rail Payment Ledger", async () => {
+    const res = await makeRequest(port, "/api/payments", "GET", undefined, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.ok(Array.isArray(res.body.data));
+    assert.ok(res.body.rails);
+    assert.ok(res.body.rails.rail1.includes("ARC_L1"));
+    assert.ok(res.body.rails.rail2.includes("MODULAR_SESSION_KEYS"));
+    assert.ok(res.body.rails.rail3.includes("ERC3009_AUTHORIZATION"));
+    assert.ok(res.body.rails.rail4.includes("GATEWAY_X402"));
+    assert.ok(res.body.rails.rail5.includes("FIAT_PAYOUT"));
+
+    // Test limit filter
+    const limitRes = await makeRequest(port, "/api/payments?limit=5", "GET", undefined, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+    assert.equal(limitRes.status, 200);
+    assert.ok(limitRes.body.data.length <= 5);
+  });
+
+  await t.test("16. Endpoint 4: /api/onboarding/discovery Asynchronous Intake Discovery Job", async () => {
+    // POST starts async discovery job
+    const postRes = await makeRequest(port, "/api/onboarding/discovery", "POST", {}, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+
+    assert.equal(postRes.status, 202);
+    assert.equal(postRes.body.success, true);
+    assert.ok(postRes.body.jobId.startsWith("job_disc_"));
+    assert.equal(postRes.body.status, "RUNNING");
+    const jobId = postRes.body.jobId;
+
+    // GET checks job status
+    const getRes = await makeRequest(port, `/api/onboarding/discovery/${jobId}`, "GET", undefined, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+
+    assert.equal(getRes.status, 200);
+    assert.equal(getRes.body.success, true);
+    assert.equal(getRes.body.jobId, jobId);
+    assert.ok(["RUNNING", "COMPLETED", "FAILED"].includes(getRes.body.status));
+
+    // GET /api/onboarding/discovery lists tenant jobs
+    const listRes = await makeRequest(port, "/api/onboarding/discovery", "GET", undefined, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+    assert.equal(listRes.status, 200);
+    assert.ok(Array.isArray(listRes.body.jobs));
+    assert.ok(listRes.body.jobs.some((j: any) => j.jobId === jobId));
+  });
+
+  await t.test("17. Endpoint 5: /api/liability-proposals & Decision Staging & CFO Approval", async () => {
+    // 1. Submit AI Intake proposal
+    const createRes = await makeRequest(port, "/api/liability-proposals", "POST", {
+      actionType: "ADD",
+      accountId: "acc_primary",
+      vendorId: "vnd_datadog",
+      proposedBy: "LiabilityRadarAgent",
+      isHumanInitiated: false,
+      details: {
+        title: "Datadog APM & Logs Subscription",
+        category: "SUBSCRIPTION",
+        amountUsdc: "175.000000",
+        payoutAddress: "0x5555555555555555555555555555555555555555",
+        frequencyCron: "0 0 1 * *",
+        dueDateIso: new Date(Date.now() + 86400 * 14 * 1000).toISOString(),
+        rationale: "Discovered new recurring contract with Datadog",
+      },
+    }, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+
+    assert.equal(createRes.status, 201);
+    assert.equal(createRes.body.success, true);
+    assert.ok(createRes.body.data.proposal_id.startsWith("PROP_REC_"));
+    assert.equal(createRes.body.data.status, "PENDING_HUMAN_APPROVAL");
+    const proposalId = createRes.body.data.proposal_id;
+
+    // 2. Query pending proposals
+    const listRes = await makeRequest(port, "/api/liability-proposals", "GET", undefined, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+    assert.equal(listRes.status, 200);
+    assert.ok(Array.isArray(listRes.body.data));
+    assert.ok(listRes.body.data.some((p: any) => p.proposal_id === proposalId));
+
+    // 3. CFO decides to approve proposal
+    const decisionRes = await makeRequest(port, `/api/liability-proposals/${proposalId}/decision`, "POST", {
+      decision: "APPROVE",
+      adminInstruction: "Ratified and authorized by CFO for observability budget.",
+    }, {
+      Authorization: `Bearer ${sessionToken}`,
+    });
+
+    assert.equal(decisionRes.status, 200);
+    assert.equal(decisionRes.body.success, true);
+    assert.equal(decisionRes.body.status, "APPROVED");
+    assert.equal(decisionRes.body.data.status, "APPROVED");
   });
 });

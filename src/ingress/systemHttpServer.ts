@@ -68,6 +68,9 @@ import { LiabilityRadarService } from "../services/liabilityRadarService.js";
 import { DisbursalRouterService } from "../services/disbursalRouterService.js";
 import { UnifiedAssetAggregatorService, DataFeedError } from "../services/unifiedAssetAggregatorService.js";
 import { PredictiveRefunderService } from "../services/predictiveRefunderService.js";
+import { TokenSwapRepo } from "../database/repos/tokenSwapRepo.js";
+import { RecurringProposalRepo } from "../database/repos/recurringProposalRepo.js";
+import { IntakeDiscoveryAgent } from "../services/intakeDiscoveryAgent.js";
 
 export const DEFAULT_API_KEY = "bizarc_auth_token_live_2026";
 
@@ -111,8 +114,18 @@ export class SystemHttpServer {
   private unifiedAssetAggregatorService: UnifiedAssetAggregatorService;
   private predictiveRefunderService: PredictiveRefunderService;
   private sseClients: Set<ServerResponse> = new Set();
-  private siweNonces: Map<string, { nonce: string; issuedAt: number }> = new Map();
+  private siweNonces: Map<string, { nonce: string; issuedAt: number; message: string }> = new Map();
   private sessions: Map<string, SessionInfo> = new Map();
+  private discoveryJobs: Map<string, {
+    jobId: string;
+    companyId: string;
+    status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+    progress: number;
+    result?: any;
+    error?: string;
+    createdAt: number;
+    completedAt?: number;
+  }> = new Map();
   private port: number;
   private isListening = false;
 
@@ -526,9 +539,10 @@ export class SystemHttpServer {
         if (!address || !address.startsWith("0x") || address.length !== 42) {
           return this.sendJson(req, res, 400, { error: "INVALID_PARAM", message: "A valid 'address' (0x...) is required." });
         }
+        const issuedAt = Date.now();
         const nonce = crypto.randomBytes(16).toString("hex");
-        this.siweNonces.set(address, { nonce, issuedAt: Date.now() });
-        const message = `${address} wants you to sign in with your Ethereum account to BizArc Autonomous Treasury.\n\nNonce: ${nonce}\nIssued At: ${new Date().toISOString()}`;
+        const message = `${address} wants you to sign in with your Ethereum account to BizArc Autonomous Treasury.\n\nNonce: ${nonce}\nIssued At: ${new Date(issuedAt).toISOString()}`;
+        this.siweNonces.set(address, { nonce, issuedAt, message });
         return this.sendJson(req, res, 200, { nonce, message });
       } catch (err: any) {
         return this.sendJson(req, res, 400, { error: "NONCE_GENERATION_FAILED", message: err.message });
@@ -548,7 +562,7 @@ export class SystemHttpServer {
         if (!entry || Date.now() - entry.issuedAt > 5 * 60 * 1000) {
           return this.sendJson(req, res, 401, { error: "NONCE_EXPIRED", message: "SIWE nonce has expired or is invalid. Please request a new nonce." });
         }
-        const message = `${address} wants you to sign in with your Ethereum account to BizArc Autonomous Treasury.\n\nNonce: ${entry.nonce}\nIssued At: ${new Date(entry.issuedAt).toISOString()}`;
+        const message = (body.message && body.message.includes(entry.nonce)) ? body.message : entry.message;
 
         const isValid = await AuthorizationGate.verifyMessageSignature({
           message,
@@ -561,8 +575,8 @@ export class SystemHttpServer {
         }
         this.siweNonces.delete(address);
 
-        const authorizedApprovers = AuthorizationGate.getAuthorizedAdminAddresses();
-        const isApprover = authorizedApprovers.includes(address as `0x${string}`);
+        const authorizedApprovers = AuthorizationGate.getAuthorizedAdminAddresses().map((a) => a.toLowerCase());
+        const isApprover = authorizedApprovers.includes(address.toLowerCase());
         const role: TenantRole = isApprover ? "CFO" : "TREASURY_OFFICER";
 
         const email = `${address.slice(0, 10)}@wallet.bizarc.local`;
@@ -1141,7 +1155,11 @@ export class SystemHttpServer {
       }
     }
 
-    if (pathname.startsWith("/api/sprs/") && pathname.endsWith("/signing-payload") && method === "GET") {
+    if (
+      pathname.startsWith("/api/sprs/") &&
+      (pathname.endsWith("/signing-payload") || pathname.endsWith("/typed-data")) &&
+      method === "GET"
+    ) {
       const parts = pathname.split("/");
       const requestId = parts[3];
       try {
@@ -1163,10 +1181,18 @@ export class SystemHttpServer {
           5042002
         );
 
+        const signerAllowlist = AuthorizationGate.getAuthorizedAdminAddresses();
+
         return this.sendJson(req, res, 200, {
           success: true,
           requestId: sprs.request_id,
           typedData,
+          domain: typedData.domain,
+          types: typedData.types,
+          primaryType: typedData.primaryType,
+          message: typedData.message,
+          deadline: typedData.message.deadline,
+          signerAllowlist,
         });
       } catch (err: any) {
         const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
@@ -1693,11 +1719,110 @@ export class SystemHttpServer {
     }
 
 
+    if (
+      (pathname === "/api/liability-proposals" || pathname === "/api/liabilities/proposals") &&
+      method === "GET"
+    ) {
+      try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const proposals = await RecurringProposalRepo.getPendingProposals();
+        return this.sendJson(req, res, 200, {
+          success: true,
+          companyId,
+          count: proposals.length,
+          data: proposals,
+        });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
+    if (
+      (pathname === "/api/liability-proposals" || pathname === "/api/liabilities/proposals") &&
+      method === "POST"
+    ) {
+      try {
+        const body = await this.parseBody(req);
+        const isHuman = (auth.role === "OWNER" || auth.role === "CFO") && body.isHumanInitiated === true && (body.proposedBy === "HUMAN" || !body.proposedBy);
+        const proposal = await RecurringProposalRepo.submitProposal({
+          actionType: body.actionType || "ADD",
+          liabilityId: body.liabilityId,
+          accountId: body.accountId || "acc_primary",
+          vendorId: body.vendorId,
+          proposedBy: isHuman ? "HUMAN" : (body.proposedBy || "LiabilityRadarAgent"),
+          details: body.details,
+          isHumanInitiated: isHuman,
+        });
+        this.broadcastSseEvent("proposal:created", { proposalId: proposal.proposal_id, proposal });
+        return this.sendJson(req, res, 201, { success: true, data: proposal });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    const proposalDecisionMatch = pathname.match(/^\/api\/liability-proposals\/([^/]+)\/decision$/);
+    if (proposalDecisionMatch && method === "POST") {
+      const proposalId = proposalDecisionMatch[1];
+      try {
+        const body = await this.parseBody(req);
+        const decision = (body.decision || body.action || "").toUpperCase();
+        const adminInstruction = body.adminInstruction || body.instructions || body.reason || "Decided by CFO";
+
+        if (decision !== "APPROVE" && decision !== "REJECT") {
+          return this.sendJson(req, res, 400, {
+            success: false,
+            error: "INVALID_DECISION: 'decision' must be 'APPROVE' or 'REJECT'.",
+          });
+        }
+
+        let updated: any;
+        if (decision === "APPROVE") {
+          updated = await RecurringProposalRepo.approveProposal(proposalId, adminInstruction);
+          this.broadcastSseEvent("proposal:approved", { proposalId, proposal: updated });
+        } else {
+          updated = await RecurringProposalRepo.rejectProposal(proposalId, adminInstruction);
+          this.broadcastSseEvent("proposal:rejected", { proposalId, proposal: updated });
+        }
+
+        return this.sendJson(req, res, 200, {
+          success: true,
+          proposalId,
+          status: updated.status,
+          decision,
+          data: updated,
+        });
+      } catch (err: any) {
+        const status = err.message.includes("not found") ? 404 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
     const liabilityDecisionMatch = pathname.match(/^\/api\/liabilities\/([^/]+)\/decision$/);
     if (liabilityDecisionMatch && method === "POST") {
       const liabilityId = liabilityDecisionMatch[1];
       try {
         const body = await this.parseBody(req);
+        if (liabilityId.startsWith("PROP_") || (await RecurringProposalRepo.getProposalById(liabilityId))) {
+          const decision = (body.decision || body.action || "").toUpperCase();
+          const adminInstruction = body.adminInstruction || body.instructions || body.reason || "Decided by CFO";
+          if (decision !== "APPROVE" && decision !== "REJECT") {
+            return this.sendJson(req, res, 400, {
+              success: false,
+              error: "INVALID_DECISION: 'decision' must be 'APPROVE' or 'REJECT'.",
+            });
+          }
+          let updated: any;
+          if (decision === "APPROVE") {
+            updated = await RecurringProposalRepo.approveProposal(liabilityId, adminInstruction);
+            this.broadcastSseEvent("proposal:approved", { proposalId: liabilityId, proposal: updated });
+          } else {
+            updated = await RecurringProposalRepo.rejectProposal(liabilityId, adminInstruction);
+            this.broadcastSseEvent("proposal:rejected", { proposalId: liabilityId, proposal: updated });
+          }
+          return this.sendJson(req, res, 200, { success: true, proposalId: liabilityId, status: updated.status, decision, data: updated });
+        }
+
         const result = await this.liabilityRadarService.resolveAdminDecision({
           requestId: body.requestId || body.permissionRequestId || liabilityId,
           decision: body.decision,
@@ -1941,6 +2066,104 @@ export class SystemHttpServer {
       }
     }
 
+    if ((pathname === "/api/treasury/yield/moves" || pathname === "/api/yield/moves") && method === "GET") {
+      try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const accountId = url.searchParams.get("accountId") || undefined;
+        const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 50;
+
+        let rawLogs: any[] = [];
+        if (accountId) {
+          const acc = await TreasuryAccountsRepo.getAccountById(accountId);
+          if (!acc || (acc.company_id && acc.company_id !== companyId)) {
+            return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Account '${accountId}' does not belong to active tenant.` });
+          }
+          rawLogs = await AuditLogRepo.getAuditLogsByAccount(accountId, limit);
+        } else {
+          rawLogs = await AuditLogRepo.getAuditLogsByCompany(companyId, limit);
+        }
+
+        const policies = await TenantPolicyManager.getInstance().getActiveProfile(companyId);
+        const invRules = policies.investment_rules || {
+          min_sweep_amount_usdc: 500,
+          invest_hysteresis_band_usdc: 1000,
+          recall_hysteresis_band_usdc: 500,
+        };
+
+        const yieldActions = new Set([
+          "AUTONOMOUS_SWEEP",
+          "AUTONOMOUS_RECALL",
+          "SWEEP_TO_USYC",
+          "USYC_RECALL",
+          "YIELD_SWEEP",
+          "YIELD_DEPOSIT",
+          "SWEEP_SUPPRESSED",
+          "RECALL_SUPPRESSED",
+          "PROTECTED_ACCOUNT",
+          "HIGH_VALUE_SWEEP_EXEMPTION",
+          "SURPLUS_SWEEP_EXECUTED",
+          "DEFICIT_RECALL_EXECUTED",
+          "HYSTERESIS_SUPPRESSED",
+        ]);
+
+        const moves = rawLogs
+          .filter((l) => {
+            const act = (l.action_type || "").toUpperCase();
+            const reason = (l.reason || "").toUpperCase();
+            return (
+              yieldActions.has(act) ||
+              act.includes("SWEEP") ||
+              act.includes("RECALL") ||
+              act.includes("YIELD") ||
+              reason.includes("SWEEP") ||
+              reason.includes("RECALL") ||
+              reason.includes("YIELD") ||
+              reason.includes("HYSTERESIS") ||
+              reason.includes("PROTECTED")
+            );
+          })
+          .map((l) => ({
+            logId: l.log_id,
+            accountId: l.account_id,
+            actionType: l.action_type,
+            amountUsdc: l.amount_usdc,
+            isAutonomous: l.is_autonomous,
+            permissionRequestId: l.permission_request_id,
+            txHash: l.tx_hash,
+            reason: l.reason,
+            timestamp: l.timestamp,
+            actorAgent: l.actor_agent,
+            snapshot: {
+              pre: l.pre_state_snapshot,
+              post: l.post_state_snapshot,
+            },
+          }));
+
+        const operatingAccounts = policies.operating_accounts || [];
+        const protectedAccounts = operatingAccounts
+          .filter((a: any) => (a.max_autonomous_sweep_limit ?? 0) <= 0)
+          .map((a: any) => a.account_id);
+
+        return this.sendJson(req, res, 200, {
+          success: true,
+          companyId,
+          count: moves.length,
+          moves,
+          shields: {
+            payrollShieldActive: protectedAccounts.length > 0,
+            protectedAccountIds: protectedAccounts,
+            hysteresisShieldActive: true,
+            minSweepAmountUsdc: invRules.min_sweep_amount_usdc ?? 500,
+            investHysteresisBandUsdc: invRules.invest_hysteresis_band_usdc ?? 1000,
+            recallHysteresisBandUsdc: invRules.recall_hysteresis_band_usdc ?? 500,
+          },
+        });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // CATEGORY 7: CURRENCY SWAPS & FIAT OFF-RAMPING APIS
     // ─────────────────────────────────────────────────────────────────────────────
@@ -2039,9 +2262,248 @@ export class SystemHttpServer {
       }
     }
 
+    if (pathname === "/api/payments" && method === "GET") {
+      try {
+        const companyId = resolveTenantId(url.searchParams.get("companyId"));
+        const accountIdFilter = url.searchParams.get("accountId") || undefined;
+        const railFilter = url.searchParams.get("rail")?.toUpperCase() || undefined;
+        const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 50;
+
+        const [journalEntries, fiatPayouts, swaps] = await Promise.all([
+          MasterJournalRepo.getEntriesByCompany(companyId, limit),
+          FiatPayoutRepo.getPayoutsByCompany(companyId, limit),
+          TokenSwapRepo.getSwapsByCompany(companyId, limit),
+        ]);
+
+        type UnifiedPaymentItem = {
+          id: string;
+          companyId: string;
+          accountId: string;
+          rail: "ARC_L1" | "MODULAR_SESSION_KEYS" | "ERC3009_AUTHORIZATION" | "GATEWAY_X402" | "FIAT_PAYOUT" | "TOKEN_SWAP" | string;
+          type: "DISBURSAL" | "PAYOUT" | "SWAP" | "TRANSFER" | "SETTLEMENT";
+          amountUsdc: string;
+          recipient: string;
+          status: "SETTLED" | "COMPLETED" | "PENDING" | "PROCESSING" | "INITIATED" | "FAILED" | "ESCALATED" | string;
+          txHash?: string | null;
+          reference?: string | null;
+          timestamp: string;
+          details?: Record<string, any>;
+        };
+
+        const unified: UnifiedPaymentItem[] = [];
+
+        // 1. Process Master Journal Entries (Rails 1, 2, 3, 4)
+        for (const j of journalEntries) {
+          const act = (j.action_type || "").toUpperCase();
+          let rail = "ARC_L1";
+          let pType: UnifiedPaymentItem["type"] = "DISBURSAL";
+
+          if (act.includes("FIAT")) {
+            rail = "FIAT_PAYOUT";
+            pType = "PAYOUT";
+          } else if (act.includes("SESSION")) {
+            rail = "MODULAR_SESSION_KEYS";
+            pType = "DISBURSAL";
+          } else if (act.includes("GATEWAY") || act.includes("X402")) {
+            rail = "GATEWAY_X402";
+            pType = "SETTLEMENT";
+          } else if (act.includes("ERC3009")) {
+            rail = "ERC3009_AUTHORIZATION";
+            pType = "DISBURSAL";
+          } else if (act.includes("SWAP")) {
+            rail = "TOKEN_SWAP";
+            pType = "SWAP";
+          } else if (act.includes("INTERNAL") || act.includes("TRANSFER")) {
+            rail = "ARC_L1";
+            pType = "TRANSFER";
+          }
+
+          unified.push({
+            id: j.sequence_id ? `jnl_${j.sequence_id}` : `jnl_${j.document_ref}`,
+            companyId: j.company_id || companyId,
+            accountId: j.account_id,
+            rail,
+            type: pType,
+            amountUsdc: Number(j.amount_usdc || 0).toFixed(6),
+            recipient: j.credit_account,
+            status: "SETTLED",
+            reference: j.document_ref,
+            txHash: j.current_hash,
+            timestamp: j.timestamp ? new Date(j.timestamp).toISOString() : new Date().toISOString(),
+            details: {
+              debitAccount: j.debit_account,
+              actionType: j.action_type,
+              previousHash: j.previous_hash,
+            },
+          });
+        }
+
+        // 2. Process Fiat Payouts (Rail 5)
+        for (const f of fiatPayouts) {
+          unified.push({
+            id: `fiat_${f.payout_id}`,
+            companyId: f.company_id || companyId,
+            accountId: f.account_id,
+            rail: "FIAT_PAYOUT",
+            type: "PAYOUT",
+            amountUsdc: Number(f.amount_usdc || 0).toFixed(6),
+            recipient: f.vendor_id,
+            status: f.status,
+            reference: f.circle_payout_ref || f.invoice_ref || f.payout_id,
+            txHash: f.burn_tx_hash || null,
+            timestamp: f.created_at ? new Date(f.created_at).toISOString() : new Date().toISOString(),
+            details: {
+              subMethod: f.sub_method,
+              feeUsdc: Number(f.fee_usdc || 0).toFixed(6),
+              imadOmadTrace: f.imad_omad_trace,
+              beneficiaryBankId: f.beneficiary_bank_id,
+            },
+          });
+        }
+
+        // 3. Process Swaps
+        for (const s of swaps) {
+          unified.push({
+            id: `swap_${s.swap_id}`,
+            companyId: s.company_id || companyId,
+            accountId: s.account_id,
+            rail: "TOKEN_SWAP",
+            type: "SWAP",
+            amountUsdc: Number(s.to_amount || s.from_amount || 0).toFixed(6),
+            recipient: `${s.to_token} on ${s.to_chain}`,
+            status: s.status === "COMPLETED" ? "SETTLED" : (s.status as any),
+            reference: s.swap_id,
+            txHash: s.tx_hash || null,
+            timestamp: s.created_at ? new Date(s.created_at).toISOString() : new Date().toISOString(),
+            details: {
+              fromChain: s.from_chain,
+              fromToken: s.from_token,
+              fromAmount: s.from_amount,
+              toChain: s.to_chain,
+              toToken: s.to_token,
+              toAmount: s.to_amount,
+              realizedRate: s.realized_rate,
+              routeAggregator: s.route_aggregator,
+            },
+          });
+        }
+
+        let filtered = unified;
+        if (accountIdFilter) {
+          filtered = filtered.filter((p) => p.accountId === accountIdFilter);
+        }
+        if (railFilter) {
+          filtered = filtered.filter((p) => p.rail.toUpperCase().includes(railFilter));
+        }
+
+        filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        const paginated = filtered.slice(0, limit);
+
+        return this.sendJson(req, res, 200, {
+          success: true,
+          companyId,
+          count: paginated.length,
+          total: filtered.length,
+          data: paginated,
+          rails: {
+            rail1: "ARC_L1 (DisbursalVaultRail)",
+            rail2: "MODULAR_SESSION_KEYS (ModularSessionKeyRail / CCTP)",
+            rail3: "ERC3009_AUTHORIZATION (Erc3009AuthorizationRail)",
+            rail4: "GATEWAY_X402 (GatewayX402Rail Nanopayments)",
+            rail5: "FIAT_PAYOUT (FiatPayoutRail Circle Mint ACH/Wire)",
+          },
+        });
+      } catch (err: any) {
+        const status = err.message.startsWith("FORBIDDEN") ? 403 : 400;
+        return this.sendJson(req, res, status, { success: false, error: err.message });
+      }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // CATEGORY 8: ONBOARDING WIZARD & MATH RULES QA APIS
     // ─────────────────────────────────────────────────────────────────────────────
+    if (pathname === "/api/onboarding/discovery" && method === "POST") {
+      try {
+        const body = await this.parseBody(req).catch(() => ({}));
+        const companyId = resolveTenantId(body.companyId || url.searchParams.get("companyId"));
+        const jobId = `job_disc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+        const jobEntry: {
+          jobId: string;
+          companyId: string;
+          status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+          progress: number;
+          result?: any;
+          error?: string;
+          createdAt: number;
+          completedAt?: number;
+        } = {
+          jobId,
+          companyId,
+          status: "RUNNING",
+          progress: 10,
+          createdAt: Date.now(),
+        };
+        this.discoveryJobs.set(jobId, jobEntry);
+
+        // Run asynchronous intake discovery background job without blocking HTTP response
+        (async () => {
+          try {
+            const agent = new IntakeDiscoveryAgent({ companyId });
+            jobEntry.progress = 35;
+            const result = await agent.synthesizeAllSources();
+            jobEntry.status = "COMPLETED";
+            jobEntry.progress = 100;
+            (jobEntry as any).result = result;
+            (jobEntry as any).completedAt = Date.now();
+            this.broadcastSseEvent("discovery:completed", { jobId, companyId, totalSpend: result.totalCommittedMonthlySpendUsdc });
+          } catch (jobErr: any) {
+            jobEntry.status = "FAILED";
+            jobEntry.progress = 100;
+            (jobEntry as any).error = jobErr.message;
+            (jobEntry as any).completedAt = Date.now();
+            this.broadcastSseEvent("discovery:failed", { jobId, companyId, error: jobErr.message });
+          }
+        })();
+
+        return this.sendJson(req, res, 202, {
+          success: true,
+          jobId,
+          status: "RUNNING",
+          progress: 10,
+          message: "Intake discovery background job initiated across MCP, ERPs, and vendor connectors.",
+        });
+      } catch (err: any) {
+        return this.sendJson(req, res, 400, { success: false, error: err.message });
+      }
+    }
+
+    if (pathname.startsWith("/api/onboarding/discovery") && method === "GET") {
+      const parts = pathname.split("/");
+      const jobId = parts[4]; // /api/onboarding/discovery/:jobId
+      const companyId = resolveTenantId(url.searchParams.get("companyId"));
+
+      if (!jobId) {
+        const tenantJobs = Array.from(this.discoveryJobs.values())
+          .filter((j) => j.companyId === companyId)
+          .sort((a, b) => b.createdAt - a.createdAt);
+        return this.sendJson(req, res, 200, { success: true, count: tenantJobs.length, jobs: tenantJobs });
+      }
+
+      const job = this.discoveryJobs.get(jobId);
+      if (!job) {
+        return this.sendJson(req, res, 404, { success: false, error: `Discovery job '${jobId}' not found.` });
+      }
+      if (job.companyId !== companyId) {
+        return this.sendJson(req, res, 403, { success: false, error: `FORBIDDEN: Discovery job does not belong to active tenant.` });
+      }
+
+      return this.sendJson(req, res, 200, {
+        success: true,
+        ...job,
+      });
+    }
+
     if (pathname === "/api/onboarding/session" && method === "POST") {
       const body = await this.parseBody(req);
       try {
