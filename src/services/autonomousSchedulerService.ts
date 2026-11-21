@@ -330,10 +330,15 @@ export class AutonomousSchedulerService {
           continue;
         }
 
-        // 3. Disbursal Router Execution
+        // 3. Query real operating balances from DynamicRecordsService
         const balances: Record<string, number> = {};
         for (const acc of accounts) {
-          balances[acc.account_id] = 50000.0; // In live environment, fetched via Circle wallet / Arc client
+          try {
+            const trip = await this.dynamicRecords.getTripartiteBalance(acc.account_id);
+            balances[acc.account_id] = Number(trip.liquidCashRaw) / 1_000_000;
+          } catch {
+            balances[acc.account_id] = 0.0;
+          }
         }
 
         const res = await this.disbursalRouter.executeLiabilityDisbursal({

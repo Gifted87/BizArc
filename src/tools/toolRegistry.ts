@@ -34,6 +34,7 @@ import { FiatFundingService } from "../services/fiatFundingService.js";
 import { LiabilitySettingsService } from "../services/liabilitySettingsService.js";
 import { ManualDisbursalService } from "../services/manualDisbursalService.js";
 import { AccountFundingService } from "../services/accountFundingService.js";
+import { ClearanceCodeRepo } from "../database/repos/clearanceCodeRepo.js";
 
 export interface ToolExecutionResult {
   success: boolean;
@@ -1290,10 +1291,32 @@ export class ToolRegistry {
 
         case "sweep_excess_liquidity": {
           const { accountId, amountUsdc, clearanceCode } = args;
-          if (!clearanceCode || typeof clearanceCode !== "string" || !clearanceCode.startsWith("CLEAR-")) {
+          if (!clearanceCode || typeof clearanceCode !== "string") {
             return {
               success: false,
-              error: `GOVERNANCE_VIOLATION: Missing or invalid compliance clearanceCode ('${clearanceCode}'). Treasury fund sweeps require prior reason-bearing intent evaluation and clearance from PolicyComplianceAgent (#104).`,
+              error: `GOVERNANCE_VIOLATION: Missing compliance clearanceCode. Treasury fund sweeps require prior reason-bearing intent evaluation and clearance from PolicyComplianceAgent (#104).`,
+            };
+          }
+
+          const isMockTest = process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true";
+          if (!isMockTest) {
+            const validation = await ClearanceCodeRepo.validateCode({
+              code: clearanceCode,
+              accountId,
+              actionType: "SWEEP_EXCESS_LIQUIDITY",
+              amountUsdc,
+            });
+            if (!validation.isValid) {
+              return {
+                success: false,
+                error: `GOVERNANCE_VIOLATION: Invalid or consumed compliance clearanceCode ('${clearanceCode}'): ${validation.reason}`,
+              };
+            }
+            await ClearanceCodeRepo.consumeCode(clearanceCode);
+          } else if (!clearanceCode.startsWith("CLEAR-")) {
+            return {
+              success: false,
+              error: `GOVERNANCE_VIOLATION: Invalid mock compliance clearanceCode ('${clearanceCode}').`,
             };
           }
           const rawAmount = this.dynamicRecords.parseUsdcToRaw(amountUsdc);
@@ -1454,20 +1477,30 @@ export class ToolRegistry {
             };
           }
 
+          if (!args.vendorId) {
+            return { success: false, error: "Missing required parameter 'vendorId'. Hardcoded vendor fallbacks are disabled." };
+          }
+          if (!args.poReference) {
+            return { success: false, error: "Missing required 3-way match parameter 'poReference'. PO_DEFAULT fallback is disabled." };
+          }
+          if (!args.deliveryProofHash) {
+            return { success: false, error: "Missing required 3-way match parameter 'deliveryProofHash' (GRN proof). Fake 0xgrn_verified fallback is disabled." };
+          }
+
           const parsedAmount = typeof amountUsdc === "number" ? amountUsdc : parseFloat(amountUsdc);
           const router = new UniversalPaymentRouter();
           const routerResult = await router.routeAndExecute({
             intent: {
               intentId: `DISB_${liabilityId || Date.now()}`,
               primaryAccountId: accountId,
-              vendorId: args.vendorId || "vendor_cloud_aws",
-              vendorName: args.vendorName || "Amazon Web Services",
+              vendorId: args.vendorId,
+              vendorName: args.vendorName || args.vendorId,
               amountUsdc: parsedAmount,
               payoutAddress: recipientAddress,
               declaredReason: args.reason || "Autonomous staged liability execution via DisbursalVault.",
               invoiceId,
-              poReference: args.poReference || "PO_DEFAULT",
-              deliveryProofHash: args.deliveryProofHash || "0xgrn_verified",
+              poReference: args.poReference,
+              deliveryProofHash: args.deliveryProofHash,
             },
             overrideRail: "DISBURSAL_VAULT",
           });
@@ -1562,6 +1595,47 @@ export class ToolRegistry {
             status: "SYNCED",
           });
 
+          let erpSyncRes: any = null;
+          try {
+            erpSyncRes = await this.erpReconciliation.reconcileDisbursalPayment({
+              qualification: {
+                invoiceId: documentRef,
+                vendorId: args.vendorId || "SYSTEM_GL",
+                payoutAddress: "0x0000000000000000000000000000000000000000",
+                totalRequestedUsdc: numAmount.toFixed(6),
+                totalRequestedRaw: BigInt(Math.floor(numAmount * 1_000_000)),
+                totalAllocatedUsdc: numAmount.toFixed(6),
+                totalAllocatedRaw: BigInt(Math.floor(numAmount * 1_000_000)),
+                category: "GENERAL_OPEX",
+                routeType: "SINGLE_ACCOUNT",
+                primaryAccountId: accountId,
+                allocations: [{
+                  accountId,
+                  accountName: "Treasury Account",
+                  accountRole: "OPERATING",
+                  allocatedAmountUsdc: numAmount.toFixed(6),
+                  allocatedAmountRaw: BigInt(Math.floor(numAmount * 1_000_000)),
+                  requiresRecall: false,
+                  recallAmountUsdc: "0.000000",
+                  recallAmountRaw: 0n,
+                  remainingFreeCapitalUsdc: "0.000000",
+                  remainingFreeCapitalRaw: 0n,
+                }],
+                requiresHumanApproval: false,
+                evaluationReason: "GL sync ledger alignment",
+                shortfallUsdc: "0.000000",
+                isQualified: true,
+                idempotencyKey: `0x${entry.current_hash}`,
+                reasonBearingIntent: { proposedAction: "POST_GL", accountId, amountUsdc: numAmount.toFixed(6), declaredReason: "GL sync", recipientAddress: "0x0000000000000000000000000000000000000000" },
+              },
+              txHash: txHash || `0x${entry.current_hash}`,
+              journalHash: entry.current_hash,
+              journalSequenceId: Number(entry.sequence_id),
+            });
+          } catch (err: any) {
+            console.warn("[ToolRegistry] ERP reconciliation sync notice:", err.message);
+          }
+
           return {
             success: true,
             data: {
@@ -1569,11 +1643,20 @@ export class ToolRegistry {
               previousHash: entry.previous_hash,
               currentHash: entry.current_hash,
               documentRef: entry.document_ref,
-              erpSyncStatus: "SYNCED_TO_MASTER_JOURNAL_AND_ERP_STAGED",
+              erpSyncStatus: erpSyncRes?.status || "SYNCED_TO_MASTER_JOURNAL_AND_ERP_STAGED",
               erpSyncId: syncCheckpoint.sync_id,
               erpConnectors: {
-                odooSync: { status: "DISPATCHED", ref: `odoo_gl_${entry.sequence_id}` },
-                erpNextSync: { status: "DISPATCHED", docType: "Journal Entry", docName: `ACC-JV-${entry.sequence_id}` },
+                odooSync: {
+                  status: erpSyncRes?.odoo?.success ? "SYNCED" : "PENDING",
+                  paymentId: erpSyncRes?.odoo?.paymentId,
+                  error: erpSyncRes?.odoo?.error,
+                },
+                erpNextSync: {
+                  status: erpSyncRes?.erpNext?.success ? "SYNCED" : "PENDING",
+                  docType: "Payment Entry",
+                  docName: erpSyncRes?.erpNext?.paymentEntryDocName,
+                  error: erpSyncRes?.erpNext?.error,
+                },
               },
               timestamp: entry.timestamp,
             },

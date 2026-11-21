@@ -76,8 +76,8 @@ In accordance with strict corporate financial controls:
 ## 5. Reference Guides & Deep Dives
 
 For further reading on the business problems, algorithmic solutions, and operational lifecycle:
-- **[Problem, Solution & Governance Philosophy](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/problem_and_solution_philosophy.md)**: Deep dive into the 3 Core Problems, Algorithmic Solutions, Parallel Balances, Inside vs. Outside the Rules, and the 4 Core Agent Capabilities.
-- **[Enterprise Onboarding & Lifecycle Guide](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/enterprise_onboarding_guide.md)**: Step-by-step walkthrough of Manual 6-step QA setup, Connected Workspace/ERP MCP draft prefill, and post-onboarding lifecycle.
-- **[Architecture Overview](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/architecture_overview.md)**: Master architectural blueprint on Arc L1.
-- **[Security & Compliance Architecture](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/security_and_compliance.md)**: Two-Layer Authorization Gate, EIP-712 SPRS protocol, and Anti-Payee Substitution Defense.
+- **[Problem, Solution & Governance Philosophy](./problem_and_solution_philosophy.md)**: Deep dive into the 3 Core Problems, Algorithmic Solutions, Parallel Balances, Inside vs. Outside the Rules, and the 4 Core Agent Capabilities.
+- **[Enterprise Onboarding & Lifecycle Guide](./enterprise_onboarding_guide.md)**: Step-by-step walkthrough of Manual 6-step QA setup, Connected Workspace/ERP MCP draft prefill, and post-onboarding lifecycle.
+- **[Architecture Overview](./architecture_overview.md)**: Master architectural blueprint on Arc L1.
+- **[Security & Compliance Architecture](./security_and_compliance.md)**: Two-Layer Authorization Gate, EIP-712 SPRS protocol, and Anti-Payee Substitution Defense.
 

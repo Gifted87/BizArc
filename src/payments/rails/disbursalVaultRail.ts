@@ -2,6 +2,7 @@ import { keccak256, stringToHex, getAddress } from "viem";
 import { DisbursalVaultService } from "../../contracts/disbursalVaultService.js";
 import { DisbursalVaultABI } from "../../contracts/artifacts.js";
 import { ArcTransactionExecutor } from "../../foundation/wallets/arcTransactionExecutor.js";
+import { IdempotencyRepo } from "../../database/repos/idempotencyRepo.js";
 import { UniversalDisbursalIntent, UniversalDisbursalExecutionResult } from "./types.js";
 
 export class DisbursalVaultRail {
@@ -42,8 +43,9 @@ export class DisbursalVaultRail {
       amountBigInt
     );
 
-    // Fast-path in-memory replay check
-    if (this.localExecutedKeys.has(idempotencyKey)) {
+    // Fast-path in-memory replay check + DB check
+    const isDbExecuted = await IdempotencyRepo.isKeyExecuted(idempotencyKey).catch(() => false);
+    if (this.localExecutedKeys.has(idempotencyKey) || isDbExecuted) {
       return {
         intentId: intent.intentId,
         rail: "DISBURSAL_VAULT",
@@ -66,6 +68,12 @@ export class DisbursalVaultRail {
     }
     if (isAlreadyExecuted) {
       this.localExecutedKeys.add(idempotencyKey);
+      await IdempotencyRepo.recordExecution({
+        key: idempotencyKey,
+        rail: "DISBURSAL_VAULT",
+        actorAgent: "DisbursalVaultRail",
+        status: "CONFIRMED",
+      }).catch(() => {});
       return {
         intentId: intent.intentId,
         rail: "DISBURSAL_VAULT",
@@ -83,8 +91,15 @@ export class DisbursalVaultRail {
     const nonce = BigInt(Date.now());
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour validity
 
-    // If exceeding threshold and no signature provided, escalate to SPRS human gate
-    if (intent.amountUsdc > 500 && !adminSignature) {
+    // If exceeding tenant-configured threshold and no signature provided, escalate to SPRS human gate
+    const humanGateThreshold = (() => {
+      try {
+        const envThreshold = process.env.SINGLE_TX_HUMAN_GATE_THRESHOLD_USDC;
+        if (envThreshold) return parseFloat(envThreshold);
+      } catch {}
+      return 500; // Conservative default; overridden by tenant policy at orchestration layer
+    })();
+    if (intent.amountUsdc > humanGateThreshold && !adminSignature) {
       return {
         intentId: intent.intentId,
         rail: "DISBURSAL_VAULT",
@@ -125,6 +140,13 @@ export class DisbursalVaultRail {
     });
 
     this.localExecutedKeys.add(idempotencyKey);
+    await IdempotencyRepo.recordExecution({
+      key: idempotencyKey,
+      rail: "DISBURSAL_VAULT",
+      actorAgent: "DisbursalVaultRail",
+      status: "EXECUTED",
+      responsePayload: { txHash: execution.txHash },
+    }).catch(() => {});
 
     return {
       intentId: intent.intentId,

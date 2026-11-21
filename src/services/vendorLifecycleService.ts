@@ -5,6 +5,7 @@ import { AuthorizationGate } from "../security/authorizationGate.js";
 
 export interface RegisterVendorPayload {
   vendorId: string;
+  companyId?: string;
   name: string;
   verifiedPayoutAddress: `0x${string}`;
   paymentEndpointUrl?: string;
@@ -38,6 +39,7 @@ export class VendorLifecycleService {
     // Direct registration into immutable Vendor Master Registry
     const record = await VendorMasterRepo.registerVendor({
       vendor_id: payload.vendorId,
+      company_id: payload.companyId,
       name: payload.name,
       verified_payout_address: payload.verifiedPayoutAddress,
       verified_by_admin: payload.verifiedByAdmin || "HUMAN_ADMIN",

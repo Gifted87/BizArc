@@ -151,6 +151,11 @@ export class AccountFundingService {
     const accountRole = account?.role || "OPERATING";
     const trackingMemo = `BIZARC-MINT-${accountId.toUpperCase()}-${targetAddress.slice(2, 8).toUpperCase()}`;
 
+    const fedwireRouting = process.env.CIRCLE_MINT_FEDWIRE_ROUTING || "CONFIGURED_IN_PORTAL";
+    const fedwireAccount = process.env.CIRCLE_MINT_FEDWIRE_ACCOUNT || "CONFIGURED_IN_PORTAL";
+    const sepaIban = process.env.CIRCLE_MINT_SEPA_IBAN || "CONFIGURED_IN_PORTAL";
+    const sepaSwift = process.env.CIRCLE_MINT_SEPA_SWIFT || "CONFIGURED_IN_PORTAL";
+
     return {
       accountId,
       accountRole,
@@ -164,25 +169,25 @@ export class AccountFundingService {
           maxAmountUsdc: 10000,
         },
         fedwire: {
-          available: true,
-          beneficiaryName: "Circle Internet Financial LLC",
-          bankName: "Bank of New York Mellon (BNY Mellon)",
-          routingNumber: "021000018",
-          accountNumber: "8900481239",
+          available: fedwireAccount !== "CONFIGURED_IN_PORTAL",
+          beneficiaryName: process.env.CIRCLE_MINT_BENEFICIARY_NAME || "Circle Internet Financial LLC",
+          bankName: process.env.CIRCLE_MINT_BANK_NAME || "Bank of New York Mellon",
+          routingNumber: fedwireRouting,
+          accountNumber: fedwireAccount,
           trackingMemo,
           settlementSpeed: "Same-Day (during Fedwire banking hours)",
         },
         ach: {
-          available: true,
-          routingNumber: "021000018",
-          accountNumber: "8900481239",
+          available: fedwireAccount !== "CONFIGURED_IN_PORTAL",
+          routingNumber: fedwireRouting,
+          accountNumber: fedwireAccount,
           trackingMemo,
           settlementSpeed: "1-2 Business Days",
         },
         sepa: {
-          available: true,
-          iban: "LU1200000000000000000",
-          swiftBic: "IRVTUS3N",
+          available: sepaIban !== "CONFIGURED_IN_PORTAL",
+          iban: sepaIban,
+          swiftBic: sepaSwift,
           trackingMemo,
           settlementSpeed: "SEPA Instant (< 30 seconds) / Next Business Day",
         },
@@ -242,7 +247,44 @@ export class AccountFundingService {
 
     if (params.method === "FIAT_CARD_ONRAMP") {
       cliCommandVerbatim = `circle wallet fund --address ${targetAddress} --chain ARC --amount ${params.amountUsdc.toFixed(2)} --token usdc --method fiat --open`;
-      checkoutUrl = `https://checkout.circle.com/onramp?session=${sessionId}&address=${targetAddress}&chain=ARC&amount=${params.amountUsdc}&email=${encodeURIComponent(params.userEmail || "")}`;
+
+      // Call Circle Checkout Sessions API if configured
+      // Call Circle Payment Intents API if configured
+      if (process.env.CIRCLE_API_KEY) {
+        try {
+          const circleBaseUrl = process.env.CIRCLE_API_BASE_URL || "https://api-sandbox.circle.com";
+          const res = await fetch(`${circleBaseUrl}/v1/businessAccount/wallets/addresses/recipient`, {
+          const res = await fetch(`${circleBaseUrl}/v1/paymentIntents`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${process.env.CIRCLE_API_KEY}`,
+            },
+            body: JSON.stringify({
+              idempotencyKey: sessionId,
+              address: targetAddress,
+              chain: "ARC",
+              amount: { amount: params.amountUsdc.toFixed(2), currency: "USD" },
+              settlementCurrency: "USD",
+              paymentMethods: [{ type: "card" }],
+            }),
+          });
+          const data: any = await res.json();
+          if (data?.data?.checkoutUrl) {
+            checkoutUrl = data.data.checkoutUrl;
+          if (data?.data?.clientSecret || data?.data?.id) {
+            checkoutUrl = data.data.paymentIntentUrl || data.data.checkoutUrl || `${circleBaseUrl}/v1/paymentIntents/${data.data.id}`;
+          }
+        } catch (err: any) {
+          console.warn("[AccountFundingService] Circle checkout API request notice:", err.message);
+          console.warn("[AccountFundingService] Circle payment intent notice:", err.message);
+        }
+      }
+
+      if (!checkoutUrl) {
+      if (!checkoutUrl && (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true")) {
+        checkoutUrl = `https://checkout.circle.com/onramp?session=${sessionId}&address=${targetAddress}&chain=ARC&amount=${params.amountUsdc}&email=${encodeURIComponent(params.userEmail || "")}`;
+      }
 
       await FiatDepositSessionRepo.createSession({
         session_id: sessionId,
@@ -285,7 +327,17 @@ export class AccountFundingService {
   public async reconcileDeposit(params: ReconcileFundingDepositParams): Promise<ReconcileFundingDepositResult> {
     const timestamp = new Date().toISOString();
     const depositId = `dep_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const txHash = params.sourceTxHash || `0x${crypto.createHash("sha256").update(`${depositId}:${params.depositReference}`).digest("hex")}`;
+    let txHash: string;
+    if (params.sourceTxHash) {
+      txHash = params.sourceTxHash;
+    } else if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+      console.warn("[AccountFundingService] LOUD WARNING: SIMULATING DEPOSIT TRANSACTION HASH in test mode.");
+      txHash = `0x${crypto.createHash("sha256").update(`${depositId}:${params.depositReference}`).digest("hex")}`;
+    } else {
+      throw new Error(
+        `[AccountFundingService] Deposit verification failed: Genuine on-chain sourceTxHash or Circle Mint deposit webhook proof is required to credit funds. Fabricated hashes are strictly rejected.`
+      );
+    }
 
     // Confirm session in database if memo matches
     try {

@@ -107,15 +107,13 @@ export class McpAppConnector {
     const googleToken = await TenantOAuthRepo.getToken(this.companyId, "GOOGLE_WORKSPACE");
     const msToken = await TenantOAuthRepo.getToken(this.companyId, "MICROSOFT_365");
 
-    if (this.googleAppsConnected && (googleToken || this.hasCustomGoogleTransport || !this.companyId || this.companyId === "default_org" || process.env.GOOGLE_WORKSPACE_MCP_URL)) {
-      connectedApps.push("Google Workspace (Drive, Gmail MCP)");
-    } else if (this.googleAppsConnected) {
+    const hasGoogle = Boolean(googleToken || this.hasCustomGoogleTransport || process.env.GOOGLE_WORKSPACE_MCP_URL);
+    if (this.googleAppsConnected && hasGoogle) {
       connectedApps.push("Google Workspace (Drive, Gmail MCP)");
     }
 
-    if (this.microsoftAppsConnected && (msToken || this.hasCustomMicrosoftTransport || !this.companyId || this.companyId === "default_org" || process.env.MICROSOFT_365_MCP_URL)) {
-      connectedApps.push("Microsoft 365 (OneDrive, Excel MCP)");
-    } else if (this.microsoftAppsConnected) {
+    const hasMs = Boolean(msToken || this.hasCustomMicrosoftTransport || process.env.MICROSOFT_365_MCP_URL);
+    if (this.microsoftAppsConnected && hasMs) {
       connectedApps.push("Microsoft 365 (OneDrive, Excel MCP)");
     }
 

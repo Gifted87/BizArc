@@ -3,14 +3,14 @@
 ## 1. Executive Summary
 
 BizArc provides two primary operational interfaces:
-1. **Physical Ingress Server**: An asynchronous HTTP server ([SystemHttpServer.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/ingress/systemHttpServer.ts)) providing REST endpoints for dashboards, ERP connectors, and webhooks.
-2. **Autonomous Tool Registry**: A structured tool invocation engine ([ToolRegistry.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/tools/toolRegistry.ts)) providing 30+ deterministic tools to cognitive LLM agents.
+1. **Physical Ingress Server**: An asynchronous HTTP server ([SystemHttpServer.ts](../src/ingress/systemHttpServer.ts)) providing REST endpoints for dashboards, ERP connectors, and webhooks.
+2. **Autonomous Tool Registry**: A structured tool invocation engine ([ToolRegistry.ts](../src/tools/toolRegistry.ts)) providing 30+ deterministic tools to cognitive LLM agents.
 
 ---
 
 ## 2. REST Ingress Server Reference
 
-The [SystemHttpServer](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/ingress/systemHttpServer.ts) executes on the configured port (default: `3000` or dynamically assigned in test suites).
+The [SystemHttpServer](../src/ingress/systemHttpServer.ts) executes on the configured port (default: `3000` or dynamically assigned in test suites).
 
 ### 2.1 State Machine Reactive Endpoints
 
@@ -168,13 +168,13 @@ The [SystemHttpServer](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/
 - **Description**: Direct endpoint to disburse commercial fiat wires (Fedwire, ACH, Push-to-Card, SEPA, SWIFT) via Rail 5.
 
 #### `POST /api/webhooks/circle-mint`
-- **Description**: Webhook listener for Circle Mint settlement confirmations (`payout.paid`, `payouts.complete`). Updates status in [fiat_payout_records](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/fiatPayoutRepo.ts) to `SETTLED`.
+- **Description**: Webhook listener for Circle Mint settlement confirmations (`payout.paid`, `payouts.complete`). Updates status in [fiat_payout_records](../src/database/repos/fiatPayoutRepo.ts) to `SETTLED`.
 
 ---
 
 ## 3. Autonomous Tool Registry Reference
 
-The [ToolRegistry](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/tools/toolRegistry.ts) provides 30+ deterministic tools to cognitive agents:
+The [ToolRegistry](../src/tools/toolRegistry.ts) provides 30+ deterministic tools to cognitive agents:
 
 ### 3.1 Analytics & Operational State Tools
 
@@ -250,8 +250,8 @@ The [ToolRegistry](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/tool
 
 ## 4. Verification and Reference Files
 
-- Ingress HTTP Server: [systemHttpServer.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/ingress/systemHttpServer.ts)
-- Tool Registry Implementation: [toolRegistry.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/tools/toolRegistry.ts)
-- Universal Router: [universalPaymentRouter.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/universalPaymentRouter.ts)
-- Token Swap Service: [tokenSwapService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/tokenSwapService.ts)
-- Fiat Funding Service: [fiatFundingService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/fiatFundingService.ts)
+- Ingress HTTP Server: [systemHttpServer.ts](../src/ingress/systemHttpServer.ts)
+- Tool Registry Implementation: [toolRegistry.ts](../src/tools/toolRegistry.ts)
+- Universal Router: [universalPaymentRouter.ts](../src/payments/universalPaymentRouter.ts)
+- Token Swap Service: [tokenSwapService.ts](../src/services/tokenSwapService.ts)
+- Fiat Funding Service: [fiatFundingService.ts](../src/services/fiatFundingService.ts)

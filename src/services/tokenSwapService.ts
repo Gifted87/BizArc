@@ -69,6 +69,13 @@ export interface SwapExecutionResult {
  * 2. Slippage Protection: Rejects swaps if estimated or realized slippage exceeds max threshold.
  * 3. Segregated Double-Entry Bookkeeping: Records realized FX conversion to MasterJournalRepo and TokenSwapRepo.
  */
+export class PricingUnavailableError extends Error {
+  constructor(message: string) {
+    super(`[PricingUnavailableError] ${message}`);
+    this.name = "PricingUnavailableError";
+  }
+}
+
 export class TokenSwapService {
   private swapKit: SwapKit;
 
@@ -94,6 +101,9 @@ export class TokenSwapService {
    */
   public async estimateSwap(params: SwapEstimateParams): Promise<SwapEstimateResult> {
     const { fromChain, fromToken, toChain, toToken, amount, slippage = 0.005 } = params;
+    const fromChain = params.fromChain || "Arc";
+    const toChain = params.toChain || "Arc";
+    const { fromToken, toToken, amount, slippage = 0.005 } = params;
 
     // Check Arc L1 Invariant: USDC <-> NATIVE is a same-asset no-op on Arc
     const isFromArc = fromChain.toLowerCase().startsWith("arc");
@@ -146,34 +156,38 @@ export class TokenSwapService {
         isCrossChain,
       };
     } catch (err: any) {
-      // If SDK estimate encounters network/mock route in test environment, provide deterministic fallback estimation
-      const parsedFrom = parseFloat(amount);
-      // Realistic rate simulation (e.g. USDT <-> USDC ~0.9998, ETH -> USDC ~$2500, etc.)
-      let simulatedRate = 1.0;
-      if (fromToken.toUpperCase().includes("ETH")) simulatedRate = 2650.0;
-      else if (toToken.toUpperCase().includes("ETH")) simulatedRate = 1 / 2650.0;
-      else if (fromToken.toUpperCase().includes("SOL")) simulatedRate = 145.0;
-      else if (toToken.toUpperCase().includes("SOL")) simulatedRate = 1 / 145.0;
-      else if (fromToken.toUpperCase().includes("EUR")) simulatedRate = 1.08;
-      else if (toToken.toUpperCase().includes("EUR")) simulatedRate = 1 / 1.08;
-      else simulatedRate = 0.9995; // Stables (USDT, DAI) with 0.05% spread
+      if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+        console.warn(`[TokenSwapService] LOUD WARNING: SIMULATING SWAP ESTIMATE in test mode. Cause: ${err.message}`);
+        const parsedFrom = parseFloat(amount);
+        let simulatedRate = 1.0;
+        if (fromToken.toUpperCase().includes("ETH")) simulatedRate = 2650.0;
+        else if (toToken.toUpperCase().includes("ETH")) simulatedRate = 1 / 2650.0;
+        else if (fromToken.toUpperCase().includes("SOL")) simulatedRate = 145.0;
+        else if (toToken.toUpperCase().includes("SOL")) simulatedRate = 1 / 145.0;
+        else if (fromToken.toUpperCase().includes("EUR")) simulatedRate = 1.08;
+        else if (toToken.toUpperCase().includes("EUR")) simulatedRate = 1 / 1.08;
+        else simulatedRate = 0.9995;
 
-      const simulatedTo = (parsedFrom * simulatedRate * (1 - slippage)).toFixed(6);
+        const simulatedTo = (parsedFrom * simulatedRate * (1 - slippage)).toFixed(6);
 
-      return {
-        fromChain,
-        fromToken,
-        fromAmount: amount,
-        toChain,
-        toToken,
-        estimatedToAmount: simulatedTo,
-        exchangeRate: simulatedRate,
-        slippagePercent: slippage * 100,
-        estimatedFeeUsdc: "0.010000",
-        routeAggregator: "LiFi",
-        isCrossChain,
-        warnings: [err.message || "Estimated via local pricing model"],
-      };
+        return {
+          fromChain,
+          fromToken,
+          fromAmount: amount,
+          toChain,
+          toToken,
+          estimatedToAmount: simulatedTo,
+          exchangeRate: simulatedRate,
+          slippagePercent: slippage * 100,
+          estimatedFeeUsdc: "0.010000",
+          routeAggregator: "LiFi",
+          isCrossChain,
+          warnings: ["Estimated via test simulated pricing model"],
+        };
+      }
+      throw new PricingUnavailableError(
+        `Pricing quote unavailable from SwapKit for ${fromToken} (${fromChain}) -> ${toToken} (${toChain}): ${err.message}`
+      );
     }
   }
 
@@ -183,9 +197,16 @@ export class TokenSwapService {
   public async executeSwap(params: SwapExecutionParams): Promise<SwapExecutionResult> {
     const timestamp = new Date().toISOString();
     const maxSlippage = params.maxSlippageLimit ?? 0.01; // 1% max allowed slippage
+    const paramsWithDefaults: SwapExecutionParams = {
+      ...params,
+      fromChain: params.fromChain || "Arc",
+      toChain: params.toChain || "Arc",
+      amount: String(params.amount),
+    };
 
     // 1. Estimate route first
     const estimate = await this.estimateSwap(params);
+    const estimate = await this.estimateSwap(paramsWithDefaults);
 
     // 2. Enforce slippage guardrail
     if ((params.slippage ?? 0.005) > maxSlippage) {
@@ -221,54 +242,29 @@ export class TokenSwapService {
           slippage: params.slippage ?? 0.005,
           adapter,
         });
-        sourceTxHash = (swapResult?.txHash || swapResult?.transactionHash || `0x${Date.now().toString(16).padStart(64, "0")}`) as `0x${string}`;
+        const realTxHash = swapResult?.txHash || swapResult?.transactionHash;
+        if (!realTxHash) {
+          throw new Error("Swap completed but no transaction hash was returned by swap provider.");
+        }
+        sourceTxHash = realTxHash as `0x${string}`;
       } else {
-        const executor = new ArcTransactionExecutor();
-        const execution = await executor.execute({
-          targetContract: ARC_CONSTANTS.USDC_PREDEPLOY,
-          abi: [
-            {
-              type: "function",
-              name: "transfer",
-              inputs: [
-                { name: "to", type: "address" },
-                { name: "amount", type: "uint256" },
-              ],
-              outputs: [{ name: "", type: "bool" }],
-              stateMutability: "nonpayable",
-            },
-          ],
-          functionName: "transfer",
-          args: ["0x0000000000000000000000000000000000000000", BigInt(Math.floor(parseFloat(params.amount) * 1_000_000))],
-          idempotencyKey: `0x${crypto.createHash("sha256").update(swapId).digest("hex")}` as `0x${string}`,
-        });
-        sourceTxHash = execution.txHash;
+        throw new Error("Circle SwapKit SDK swap() function is unavailable in this environment.");
       }
     } catch (swapErr: any) {
-      console.warn("[TokenSwapService] Primary swap path notice, executing via onchain executor:", swapErr.message);
-      try {
-        const executor = new ArcTransactionExecutor();
-        const execution = await executor.execute({
-          targetContract: ARC_CONSTANTS.USDC_PREDEPLOY,
-          abi: [
-            {
-              type: "function",
-              name: "transfer",
-              inputs: [
-                { name: "to", type: "address" },
-                { name: "amount", type: "uint256" },
-              ],
-              outputs: [{ name: "", type: "bool" }],
-              stateMutability: "nonpayable",
-            },
-          ],
-          functionName: "transfer",
-          args: ["0x0000000000000000000000000000000000000000", BigInt(Math.floor(parseFloat(params.amount) * 1_000_000))],
-          idempotencyKey: `0x${crypto.createHash("sha256").update(swapId).digest("hex")}` as `0x${string}`,
-        });
-        sourceTxHash = execution.txHash;
-      } catch {
+      if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+        console.warn("[TokenSwapService] LOUD WARNING: SIMULATING SWAP EXECUTION in test mode. Cause:", swapErr.message);
         sourceTxHash = `0x${Date.now().toString(16).padStart(64, "0")}` as `0x${string}`;
+      } else {
+        return {
+          swapId,
+          success: false,
+          status: "FAILED",
+          fromAmount: params.amount,
+          toAmount: "0.000000",
+          realizedRate: 0,
+          error: `Swap execution failed via SwapKit: ${swapErr.message}`,
+          timestamp: new Date().toISOString(),
+        };
       }
     }
 

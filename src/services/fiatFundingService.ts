@@ -20,6 +20,7 @@ export interface FiatOnRampSessionResult {
   chain: string;
   cliCommandVerbatim: string;
   checkoutUrl: string;
+  checkoutUrl?: string;
   expiresAt: string;
 }
 
@@ -91,6 +92,36 @@ export class FiatFundingService {
 
     // Direct browser checkout URL for web dashboards
     const checkoutUrl = `https://checkout.circle.com/onramp?session=${sessionId}&address=${targetAddress}&chain=${chain}&amount=${params.amountUsdc}&email=${encodeURIComponent(params.userEmail || "")}`;
+    // Direct browser checkout URL for web dashboards via Circle Payment Intents
+    let checkoutUrl: string | undefined;
+    if (process.env.CIRCLE_API_KEY) {
+      try {
+        const circleBaseUrl = process.env.CIRCLE_API_BASE_URL || "https://api-sandbox.circle.com";
+        const res = await fetch(`${circleBaseUrl}/v1/paymentIntents`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.CIRCLE_API_KEY}`,
+          },
+          body: JSON.stringify({
+            idempotencyKey: sessionId,
+            amount: { amount: params.amountUsdc.toFixed(2), currency: "USD" },
+            settlementCurrency: "USD",
+            paymentMethods: [{ type: "card" }],
+          }),
+        });
+        const data: any = await res.json();
+        if (data?.data?.clientSecret || data?.data?.id) {
+          checkoutUrl = data.data.paymentIntentUrl || data.data.checkoutUrl || `${circleBaseUrl}/v1/paymentIntents/${data.data.id}`;
+        }
+      } catch (err: any) {
+        console.warn("[FiatFundingService] Circle payment intent notice:", err.message);
+      }
+    }
+
+    if (!checkoutUrl && (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true")) {
+      checkoutUrl = `https://checkout.circle.com/onramp?session=${sessionId}&address=${targetAddress}&chain=${chain}&amount=${params.amountUsdc}&email=${encodeURIComponent(params.userEmail || "")}`;
+    }
 
     // Persist session to PostgreSQL
     try {
@@ -147,15 +178,19 @@ export class FiatFundingService {
       // Non-fatal
     }
 
+    const fedwireRouting = process.env.CIRCLE_MINT_FEDWIRE_ROUTING || "CONFIGURED_IN_PORTAL";
+    const fedwireAccount = process.env.CIRCLE_MINT_FEDWIRE_ACCOUNT || "CONFIGURED_IN_PORTAL";
+    const swiftCode = process.env.CIRCLE_MINT_SWIFT || "CONFIGURED_IN_PORTAL";
+
     return {
       accountId: params.accountId,
       targetWalletAddress: targetAddress,
       currency,
-      beneficiaryName: "Circle Internet Financial LLC",
-      beneficiaryBank: "Bank of New York Mellon (BNY Mellon)",
-      routingNumber: "021000018",
-      accountNumber: "8900481239",
-      swiftCode: "IRVTUS3N",
+      beneficiaryName: process.env.CIRCLE_MINT_BENEFICIARY_NAME || "Circle Internet Financial LLC",
+      beneficiaryBank: process.env.CIRCLE_MINT_BANK_NAME || "Bank of New York Mellon",
+      routingNumber: fedwireRouting,
+      accountNumber: fedwireAccount,
+      swiftCode,
       depositTrackingMemo,
       instructions: `Initiate a domestic Fedwire or international SWIFT wire from your corporate bank. You MUST include the depositTrackingMemo '${depositTrackingMemo}' in Wire Reference Field 70 so Circle Mint credits your Arc L1 wallet (${targetAddress}).`,
     };
@@ -167,7 +202,17 @@ export class FiatFundingService {
   public async recordFiatDeposit(params: RecordFiatDepositParams): Promise<RecordFiatDepositResult> {
     const timestamp = new Date().toISOString();
     const depositId = `dep_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const txHash = `0x${crypto.createHash("sha256").update(`${depositId}:${params.depositReference}`).digest("hex")}`;
+    let txHash: string;
+    if (params.depositReference?.startsWith("0x") && params.depositReference.length === 66) {
+      txHash = params.depositReference;
+    } else if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+      console.warn("[FiatFundingService] LOUD WARNING: SIMULATING FIAT DEPOSIT HASH in test mode.");
+      txHash = `0x${crypto.createHash("sha256").update(`${depositId}:${params.depositReference}`).digest("hex")}`;
+    } else {
+      throw new Error(
+        `[FiatFundingService] Deposit verification failed: Genuine on-chain mint transaction hash or verified webhook reference required. Fabricated hashes are strictly rejected.`
+      );
+    }
 
     // Check for pending deposit session and confirm it
     try {

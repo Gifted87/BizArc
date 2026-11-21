@@ -2,14 +2,14 @@
 
 ## 1. Architectural Overview
 
-BizArc solves the fragmentation between enterprise crypto treasuries and commercial corporate banking through the **Universal Payment Router** ([UniversalPaymentRouter.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/universalPaymentRouter.ts)). 
+BizArc solves the fragmentation between enterprise crypto treasuries and commercial corporate banking through the **Universal Payment Router** ([UniversalPaymentRouter.ts](../src/payments/universalPaymentRouter.ts)).
 
 The router provides a single programmatic interface for all outgoing corporate disbursements. When an invoice or payment request arrives, the router evaluates corporate policy, automatically recalls invested liquidity if needed, verifies counterparty identity, and routes the payment across the optimal rail:
 
 ```mermaid
 graph TD
     Intent[UniversalDisbursalIntent] --> Router[UniversalPaymentRouter]
-    
+
     subgraph Invariant Engine
         Inv0[0. Two-Layer Authorization Gate]
         Inv1[1. Loud Rounding Rejection]
@@ -21,7 +21,7 @@ graph TD
     Router --> Inv0 --> Inv1 --> Inv2 --> Inv3 --> Inv4
 
     Inv4 --> RailSelect{Rail Resolution}
-    
+
     RailSelect -->|Rail 1: Smart Contract Waterfall| R1[DisbursalVault.sol<br/>Arc L1 Transient Clearinghouse]
     RailSelect -->|Rail 2: Modular Accounts| R2[ModularSessionKeyRail<br/>ERC-4337 / ERC-6900 UserOps]
     RailSelect -->|Rail 3: Gasless Authorization| R3[ERC3009AuthorizationRail<br/>Native Arc USDC Delegated]
@@ -36,7 +36,7 @@ graph TD
 
 ## 2. Universal Disbursal Intent Interface
 
-Every payment in BizArc is initiated using a strongly typed [UniversalDisbursalIntent](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/rails/types.ts):
+Every payment in BizArc is initiated using a strongly typed [UniversalDisbursalIntent](../src/payments/rails/types.ts):
 
 ```typescript
 export interface UniversalDisbursalIntent {
@@ -74,12 +74,12 @@ export interface UniversalDisbursalIntent {
 
 ## 3. Seven Invariant Execution Gates
 
-Prior to dispatching funds to any rail, [UniversalPaymentRouter](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/universalPaymentRouter.ts) executes seven strict validation phases:
+Prior to dispatching funds to any rail, [UniversalPaymentRouter](../src/payments/universalPaymentRouter.ts) executes seven strict validation phases:
 
 ### Invariant 0: Two-Layer Authorization Gate
 Verifies that the action has either:
-- **Layer 1 Authorization**: A single-use `#CLEAR-...` clearance code issued by [PolicyComplianceLlmAgent](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/agents/policyComplianceLlmAgent.ts) for actions inside defined rules.
-- **Layer 2 Authorization**: A valid EIP-712 cryptographic signature from an authorized corporate officer or an approved SPRS in [PermissionRequestRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/permissionRequestRepo.ts).
+- **Layer 1 Authorization**: A single-use `#CLEAR-...` clearance code issued by [PolicyComplianceLlmAgent](../src/agents/policyComplianceLlmAgent.ts) for actions inside defined rules.
+- **Layer 2 Authorization**: A valid EIP-712 cryptographic signature from an authorized corporate officer or an approved SPRS in [PermissionRequestRepo](../src/database/repos/permissionRequestRepo.ts).
 
 ### Invariant 1: Loud Rounding Rejection (Golden Rule 5)
 Refuses floating-point approximations. If `amountUsdc` contains more than 6 decimal places:
@@ -92,13 +92,13 @@ if (decimalParts.length === 2 && decimalParts[1].length > 6) {
 
 ### Invariant 2: Movement Policy & Payroll Wall Isolation
 - **Payroll Wall**: If `primaryAccountId` has role `PAYROLL` and `category !== 'PAYROLL'`, the payment is rejected immediately.
-- **Automatic USYC Recall**: If liquid balance ($B_L$) is insufficient but available balance ($B_L + B_Y$) covers the invoice, the router automatically recalls the deficit from [CentralTreasuryYieldVault](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/CentralTreasuryYieldVault.sol).
-- **Waterfall Allocation**: If the primary account lacks full funding, [MovementPolicyRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/movementPolicyRepo.ts) calculates a multi-account draw in priority order, excluding protected accounts.
+- **Automatic USYC Recall**: If liquid balance ($B_L$) is insufficient but available balance ($B_L + B_Y$) covers the invoice, the router automatically recalls the deficit from [CentralTreasuryYieldVault](../contracts/CentralTreasuryYieldVault.sol).
+- **Waterfall Allocation**: If the primary account lacks full funding, [MovementPolicyRepo](../src/database/repos/movementPolicyRepo.ts) calculates a multi-account draw in priority order, excluding protected accounts.
 
 ### Invariant 3: Payee Substitution Defense (Golden Rule 3)
-- Resolves counterparty credentials against [VendorMasterRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorMasterRepo.ts) and [VendorPaymentPreferenceRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorPaymentPreferenceRepo.ts).
+- Resolves counterparty credentials against [VendorMasterRepo](../src/database/repos/vendorMasterRepo.ts) and [VendorPaymentPreferenceRepo](../src/database/repos/vendorPaymentPreferenceRepo.ts).
 - For crypto rails: `intent.payoutAddress` must match `vendor.verified_payout_address`.
-- For fiat rails: `intent.beneficiaryBank` is matched against [VendorBankRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorBankRepo.ts).
+- For fiat rails: `intent.beneficiaryBank` is matched against [VendorBankRepo](../src/database/repos/vendorBankRepo.ts).
 - Counterparty substitution triggers instant freeze and security escalation.
 
 ### Invariant 4: Three-Way Match Verification (Golden Rule 2)
@@ -111,15 +111,15 @@ For commercial vendor invoices, verifies the presence and integrity of:
 Executes the target payment rail. If an autonomous limit is breached, the transaction halts and generates an EIP-712 Standardized Permission Request.
 
 ### Invariant 6: Double-Entry Journaling & ERP Staging
-Upon successful rail execution, appends a dual-entry voucher to [MasterJournalRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/masterJournalRepo.ts) with sequential SHA-256 hash chaining and stages the entry for Odoo / ERPNext synchronization.
+Upon successful rail execution, appends a dual-entry voucher to [MasterJournalRepo](../src/database/repos/masterJournalRepo.ts) with sequential SHA-256 hash chaining and stages the entry for Odoo / ERPNext synchronization.
 
 ---
 
 ## 4. Deep-Dive: The 5 Universal Payment Rails
 
 ### 4.1 Rail 1: DisbursalVault (Arc L1 Smart Contract Waterfall)
-- **File**: [disbursalVaultRail.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/rails/disbursalVaultRail.ts)
-- **Smart Contract**: [DisbursalVault.sol](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/DisbursalVault.sol)
+- **File**: [disbursalVaultRail.ts](../src/payments/rails/disbursalVaultRail.ts)
+- **Smart Contract**: [DisbursalVault.sol](../contracts/DisbursalVault.sol)
 - **Mechanism**:
   1. The vault holds **$0 balance at rest**.
   2. Operating accounts approve the vault for the exact disbursement sum.
@@ -127,14 +127,14 @@ Upon successful rail execution, appends a dual-entry voucher to [MasterJournalRe
   4. If amount exceeds `eip712ApprovalThreshold`, requires an onchain-verified EIP-712 human CFO signature.
 
 ### 4.2 Rail 2: Modular Session Keys (ERC-4337 / ERC-6900)
-- **File**: [modularSessionKeyRail.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/rails/modularSessionKeyRail.ts)
+- **File**: [modularSessionKeyRail.ts](../src/payments/rails/modularSessionKeyRail.ts)
 - **Mechanism**:
-  1. Grants agents time-bound, scoped cryptographic signing authority managed in [SessionKeyRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/sessionKeyRepo.ts).
+  1. Grants agents time-bound, scoped cryptographic signing authority managed in [SessionKeyRepo](../src/database/repos/sessionKeyRepo.ts).
   2. Enforces maximum amount per cycle (`max_amount_per_cycle_usdc`), cycle duration (`cycle_duration_seconds`), and expiration timestamp.
-  3. Executes real onchain UserOps on Arc L1 targeting `ARC_CONSTANTS.USDC_PREDEPLOY` via [ArcTransactionExecutor](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/contracts/arcTransactionExecutor.ts) using the 20 Gwei gas floor.
+  3. Executes real onchain UserOps on Arc L1 targeting `ARC_CONSTANTS.USDC_PREDEPLOY` via [ArcTransactionExecutor](../src/contracts/arcTransactionExecutor.ts) using the 20 Gwei gas floor.
 
 ### 4.3 Rail 3: ERC-3009 Gasless Delegated Authorizations
-- **File**: [erc3009AuthorizationRail.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/rails/erc3009AuthorizationRail.ts)
+- **File**: [erc3009AuthorizationRail.ts](../src/payments/rails/erc3009AuthorizationRail.ts)
 - **Mechanism**:
   1. Leverages Arc USDC's native EIP-3009 `receiveWithAuthorization` interface:
      ```solidity
@@ -148,18 +148,18 @@ Upon successful rail execution, appends a dual-entry voucher to [MasterJournalRe
          uint8 v, bytes32 r, bytes32 s
      ) external;
      ```
-  2. Nonces are stored in [erc3009_authorizations](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/erc3009Repo.ts) to guarantee zero signature replay.
+  2. Nonces are stored in [erc3009_authorizations](../src/database/repos/erc3009Repo.ts) to guarantee zero signature replay.
 
 ### 4.4 Rail 4: Circle Gateway x402 Micropayments
-- **File**: [gatewayX402Rail.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/rails/gatewayX402Rail.ts)
+- **File**: [gatewayX402Rail.ts](../src/payments/rails/gatewayX402Rail.ts)
 - **Mechanism**:
   1. Initiates an HTTP request to the external AI agent service URL.
   2. Intercepts the HTTP `402 Payment Required` challenge containing price, payment address, and facilitator headers.
   3. Signs a cryptographic micropayment authorization using the agent wallet.
-  4. Re-submits request with the payment authorization; receives external service payload and records micropayment in [AuditLogRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/auditLogRepo.ts).
+  4. Re-submits request with the payment authorization; receives external service payload and records micropayment in [AuditLogRepo](../src/database/repos/auditLogRepo.ts).
 
 ### 4.5 Rail 5: Universal Fiat Payouts (Commercial Banking)
-- **File**: [fiatPayoutRail.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/rails/fiatPayoutRail.ts)
+- **File**: [fiatPayoutRail.ts](../src/payments/rails/fiatPayoutRail.ts)
 - **Commercial Banking Integration**:
   1. Built for non-crypto corporate suppliers (landlords, utilities, legal counsel, enterprise SaaS).
   2. Supports 5 distinct fiat payment sub-methods:
@@ -169,7 +169,7 @@ Upon successful rail execution, appends a dual-entry voucher to [MasterJournalRe
      - **SEPA / SEPA INSTANT**: Eurozone commercial bank payouts in EUR/EURC.
      - **SWIFT**: International multi-currency commercial wire transfers.
   3. **Onchain Double-Entry Tie**: Executes an onchain tracking burn transaction on Arc L1 (`transfer(address(0), amount)`) to tie traditional bank wire releases to the tamper-evident cryptographic ledger.
-  4. Records payout details in [fiat_payout_records](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/fiatPayoutRepo.ts).
+  4. Records payout details in [fiat_payout_records](../src/database/repos/fiatPayoutRepo.ts).
   5. Webhook reconciliation via `POST /api/webhooks/circle-mint` updates status from `PROCESSING` to `SETTLED`.
 
 ---
@@ -179,7 +179,7 @@ Upon successful rail execution, appends a dual-entry voucher to [MasterJournalRe
 To ensure BizArc can ingest revenue and capital from any blockchain ecosystem:
 
 ### 5.1 Circle Swap Kit & LiFi Multi-Chain Swaps
-- **Implementation**: [TokenSwapService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/tokenSwapService.ts)
+- **Implementation**: [TokenSwapService.ts](../src/services/tokenSwapService.ts)
 - Connects `@circle-fin/swap-kit` with `@circle-fin/adapter-viem-v2` (`createViemAdapterFromPrivateKey({ privateKey })`).
 - Allows swapping incoming tokens (e.g., USDT, DAI, ETH) across Ethereum, Base, Arbitrum, and Solana directly into native Arc USDC.
 - **Arc L1 Duality Rule**: Rejects swaps attempting to exchange USDC $\leftrightarrow$ NATIVE on Arc L1, enforcing the protocol invariant that USDC *is* the native token.
@@ -191,8 +191,8 @@ To ensure BizArc can ingest revenue and capital from any blockchain ecosystem:
 
 ## 6. Verification and Reference Files
 
-- Router Implementation: [universalPaymentRouter.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/universalPaymentRouter.ts)
-- Rail Interfaces: [rails/types.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/rails/types.ts)
-- Fiat Payout Rail: [fiatPayoutRail.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/rails/fiatPayoutRail.ts)
-- Token Swap Service: [tokenSwapService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/tokenSwapService.ts)
-- Disbursal Vault Contract: [DisbursalVault.sol](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/DisbursalVault.sol)
+- Router Implementation: [universalPaymentRouter.ts](../src/payments/universalPaymentRouter.ts)
+- Rail Interfaces: [rails/types.ts](../src/payments/rails/types.ts)
+- Fiat Payout Rail: [fiatPayoutRail.ts](../src/payments/rails/fiatPayoutRail.ts)
+- Token Swap Service: [tokenSwapService.ts](../src/services/tokenSwapService.ts)
+- Disbursal Vault Contract: [DisbursalVault.sol](../contracts/DisbursalVault.sol)

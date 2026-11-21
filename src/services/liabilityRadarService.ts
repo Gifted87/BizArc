@@ -198,10 +198,11 @@ export class LiabilityRadarService {
    */
   public async scanPreFlightLiabilities(
     hoursThreshold = 48,
-    balanceOverrides?: Record<string, { liquidUsdc?: number; investedUsyc?: number }>
+    balanceOverrides?: Record<string, { liquidUsdc?: number; investedUsyc?: number }>,
+    companyId?: string
   ): Promise<StandardizedPermissionRequest[]> {
     const windowDays = Math.ceil(hoursThreshold / 24);
-    const upcoming = await LiabilityRepo.getUpcomingLiabilities(windowDays);
+    const upcoming = await LiabilityRepo.getUpcomingLiabilities(windowDays, undefined, companyId);
     const sprsRequests: StandardizedPermissionRequest[] = [];
 
     const now = Date.now();

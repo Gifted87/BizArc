@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-At the core of BizArc is an unbroken operational fabric comprising **5 Reactive State Machines** coordinated by the [TreasuryStateMachineOrchestrator](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/treasuryStateMachineOrchestrator.ts) and executed by the [TreasuryDaemon](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/daemon/treasuryDaemon.ts).
+At the core of BizArc is an unbroken operational fabric comprising **5 Reactive State Machines** coordinated by the [TreasuryStateMachineOrchestrator](../src/orchestration/treasuryStateMachineOrchestrator.ts) and executed by the [TreasuryDaemon](../src/daemon/treasuryDaemon.ts).
 
 Unlike traditional systems where scheduled scripts run in isolated silos, BizArc connects all financial actions into a reactive chain:
 - Staging a new liability in Machine 2 automatically triggers Machine 3 to recalculate Safe-to-Invest.
@@ -32,24 +32,24 @@ graph TD
 
 | Machine | Class Name | Primary Inbound Trigger | Actor Agent | Focus Area |
 | :--- | :--- | :--- | :--- | :--- |
-| **Machine 1** | [OnboardingStateMachine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/OnboardingStateMachine.ts) | Enterprise Intake Payload | OnboardingAgent (#100) | 7-Phase Enterprise Bootstrap, ERP Discovery, Ground-Truth Genesis |
-| **Machine 2** | [LiabilityDiscoveryStateMachine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/LiabilityDiscoveryStateMachine.ts) | Inbound Invoices, Connected Apps | LiabilityRadarAgent (#102) | 3-Way Matching, Payee Substitution Defense, Dynamic Record 1 |
-| **Machine 3** | [YieldRebalancingStateMachine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/YieldRebalancingStateMachine.ts) | Arc L1 Events, Internal Mutations | TreasurySentinelAgent (#101) | Tripartite Balance Invariant, Safe-to-Invest, USYC Sweeps & Recalls |
-| **Machine 4** | [LiabilityDisbursalStateMachine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/LiabilityDisbursalStateMachine.ts) | Temporal Scheduler (48h Pre-Flight) | DisbursalRouterAgent (#103) | Multi-Account Waterfall, DisbursalVault, Fiat Settlement |
-| **Machine 5** | [AdHocPaymentStateMachine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/AdHocPaymentStateMachine.ts) | Operator / Discretionary Requests | PolicyComplianceAgent (#104) | Non-Liability Outflows, Two-Layer Authorization, SPRS Escapes |
+| **Machine 1** | [OnboardingStateMachine](../src/orchestration/stateMachines/OnboardingStateMachine.ts) | Enterprise Intake Payload | OnboardingAgent (#100) | 7-Phase Enterprise Bootstrap, ERP Discovery, Ground-Truth Genesis |
+| **Machine 2** | [LiabilityDiscoveryStateMachine](../src/orchestration/stateMachines/LiabilityDiscoveryStateMachine.ts) | Inbound Invoices, Connected Apps | LiabilityRadarAgent (#102) | 3-Way Matching, Payee Substitution Defense, Dynamic Record 1 |
+| **Machine 3** | [YieldRebalancingStateMachine](../src/orchestration/stateMachines/YieldRebalancingStateMachine.ts) | Arc L1 Events, Internal Mutations | TreasurySentinelAgent (#101) | Tripartite Balance Invariant, Safe-to-Invest, USYC Sweeps & Recalls |
+| **Machine 4** | [LiabilityDisbursalStateMachine](../src/orchestration/stateMachines/LiabilityDisbursalStateMachine.ts) | Temporal Scheduler (48h Pre-Flight) | DisbursalRouterAgent (#103) | Multi-Account Waterfall, DisbursalVault, Fiat Settlement |
+| **Machine 5** | [AdHocPaymentStateMachine](../src/orchestration/stateMachines/AdHocPaymentStateMachine.ts) | Operator / Discretionary Requests | PolicyComplianceAgent (#104) | Non-Liability Outflows, Two-Layer Authorization, SPRS Escapes |
 
 ---
 
 ## 3. Deep-Dive: State Machine Specifications
 
 ### 3.1 Machine 1: Enterprise Onboarding State Machine
-- **Implementation**: [OnboardingStateMachine.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/OnboardingStateMachine.ts)
+- **Implementation**: [OnboardingStateMachine.ts](../src/orchestration/stateMachines/OnboardingStateMachine.ts)
 - **Lifecycle States**:
   1. `INTAKE_SUBMITTED`: Entity metadata, Bylaws, MSAs, and ERP credentials ingested.
   2. `POLICY_SYNTHESIZED`: Cognitive proposal synthesized based on corporate obligations.
-  3. `WALLETS_PROVISIONED`: Arc L1 operating accounts initialized in [treasury_accounts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/treasuryAccountsRepo.ts).
-  4. `LEDGER_INITIALIZED`: Genesis block created in [master_system_journal](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/masterJournalRepo.ts).
-  5. `CONTRACTS_REGISTERED`: Operating accounts registered in [CentralTreasuryYieldVault](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/CentralTreasuryYieldVault.sol).
+  3. `WALLETS_PROVISIONED`: Arc L1 operating accounts initialized in [treasury_accounts](../src/database/repos/treasuryAccountsRepo.ts).
+  4. `LEDGER_INITIALIZED`: Genesis block created in [master_system_journal](../src/database/repos/masterJournalRepo.ts).
+  5. `CONTRACTS_REGISTERED`: Operating accounts registered in [CentralTreasuryYieldVault](../contracts/CentralTreasuryYieldVault.sol).
   6. `GUARDRAILS_PREPARED`: Monotonic Circle CLI spending cap commands generated for terminal OTP handoff.
   7. `FUNDING_VERIFIED`: Initial USDC deposit verified on Arc L1.
   8. `FULLY_ACTIVATED`: Company profile set to `ACTIVE`.
@@ -70,16 +70,16 @@ stateDiagram-v2
 ---
 
 ### 3.2 Machine 2: Liability Discovery State Machine
-- **Implementation**: [LiabilityDiscoveryStateMachine.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/LiabilityDiscoveryStateMachine.ts)
+- **Implementation**: [LiabilityDiscoveryStateMachine.ts](../src/orchestration/stateMachines/LiabilityDiscoveryStateMachine.ts)
 - **Lifecycle States**:
   1. `PAYLOAD_RECEIVED`: Raw invoice payload parsed from webhook or document scanner.
   2. `FORENSIC_3_WAY_MATCH`: Evaluates PO terms, Goods Receipt Notes, and invoice amounts. Discrepancies fail immediately.
   3. `VENDOR_MASTER_VERIFIED`: Payee check:
-     - For fiat invoices: cross-references bank details against [VendorBankRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorBankRepo.ts).
-     - For crypto invoices: verifies `payoutAddress` against [VendorMasterRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorMasterRepo.ts).
+     - For fiat invoices: cross-references bank details against [VendorBankRepo](../src/database/repos/vendorBankRepo.ts).
+     - For crypto invoices: verifies `payoutAddress` against [VendorMasterRepo](../src/database/repos/vendorMasterRepo.ts).
   4. `PRICE_CREEP_DETECTED`: Stealth price hikes (>15% above 3-month trailing average) escalated to human review.
   5. `PAYEE_MISMATCH_REJECTED`: Unverified counterparty transitions to `FROZEN`.
-  6. `STAGED_SCHEDULED`: Obligation committed to Dynamic Record 1 ([account_liabilities](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/liabilityRepo.ts)).
+  6. `STAGED_SCHEDULED`: Obligation committed to Dynamic Record 1 ([account_liabilities](../src/database/repos/liabilityRepo.ts)).
   7. **Cross-Trigger to Machine 3**: Dispatches notification to recalculate Dynamic Record 2.
 
 ```mermaid
@@ -100,12 +100,12 @@ stateDiagram-v2
 ---
 
 ### 3.3 Machine 3: Automated Yield Rebalancing State Machine
-- **Implementation**: [YieldRebalancingStateMachine.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/YieldRebalancingStateMachine.ts)
+- **Implementation**: [YieldRebalancingStateMachine.ts](../src/orchestration/stateMachines/YieldRebalancingStateMachine.ts)
 - **Lifecycle States**:
   1. `MUTATION_DETECTED`: Triggered by Arc L1 transfer log or internal ledger mutation.
   2. `INTERNAL_FILTERED`: Filtered if transfer is an internal settlement between internal accounts, preventing rebalancing feedback loops.
-  3. `DEBOUNCED`: 5-second sliding window via [DebounceEngine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/foundation/events/debounceEngine.ts) to batch high-frequency micro-inflows.
-  4. `TOKEN_SWAP_CONVERTED`: Non-USDC tokens auto-swapped to native Arc USDC via [TokenSwapService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/tokenSwapService.ts).
+  3. `DEBOUNCED`: 5-second sliding window via [DebounceEngine](../src/foundation/events/debounceEngine.ts) to batch high-frequency micro-inflows.
+  4. `TOKEN_SWAP_CONVERTED`: Non-USDC tokens auto-swapped to native Arc USDC via [TokenSwapService](../src/services/tokenSwapService.ts).
   5. `RECORD_2_RECALCULATED`: Safe-to-Invest recalculated for the cost center.
   6. `SURPLUS_SWEEP_EXECUTED`: If $\text{Safe-to-Invest} > 0$, excess liquid funds swept to USYC on Arc L1.
   7. `DEFICIT_RECALL_EXECUTED`: If upcoming liabilities require cash, invested shares recalled to operating wallet.
@@ -133,16 +133,16 @@ stateDiagram-v2
 ---
 
 ### 3.4 Machine 4: Liability Disbursal State Machine
-- **Implementation**: [LiabilityDisbursalStateMachine.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/LiabilityDisbursalStateMachine.ts)
+- **Implementation**: [LiabilityDisbursalStateMachine.ts](../src/orchestration/stateMachines/LiabilityDisbursalStateMachine.ts)
 - **Lifecycle States**:
-  1. `DUE_LIABILITY_IDENTIFIED`: Scanned by [AutonomousSchedulerService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/autonomousSchedulerService.ts).
+  1. `DUE_LIABILITY_IDENTIFIED`: Scanned by [AutonomousSchedulerService](../src/services/autonomousSchedulerService.ts).
   2. `PRE_FLIGHT_WINDOW_ACTIVE`: Entered 48 hours prior to `due_date`.
   3. `LIQUIDITY_RECALL_EXECUTED`: If cash is invested in USYC, pulls liquid funds back into operating account.
   4. `WATERFALL_QUALIFIED`: Multi-account funding computed; strictly excludes `PAYROLL` role.
   5. `ROUTE_QUALIFIED`: Selects optimal rail (Rails 1–5).
   6. `SPRS_SUBMISSION_REQUIRED`: If payment exceeds spending limits, generates EIP-712 human sign-off request.
   7. `SETTLEMENT_EXECUTED`: Disbursal executed through chosen rail.
-  8. `WITNESSED_AND_SETTLED`: Document-linked general ledger entry posted to [MasterJournalRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/masterJournalRepo.ts).
+  8. `WITNESSED_AND_SETTLED`: Document-linked general ledger entry posted to [MasterJournalRepo](../src/database/repos/masterJournalRepo.ts).
   9. **Cross-Trigger to Machine 3**: Prompts post-settlement yield rebalancing.
 
 ```mermaid
@@ -164,12 +164,12 @@ stateDiagram-v2
 ---
 
 ### 3.5 Machine 5: Ad-Hoc Discretionary Payment State Machine
-- **Implementation**: [AdHocPaymentStateMachine.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines/AdHocPaymentStateMachine.ts)
+- **Implementation**: [AdHocPaymentStateMachine.ts](../src/orchestration/stateMachines/AdHocPaymentStateMachine.ts)
 - **Lifecycle States**:
   1. `REQUEST_RECEIVED`: Non-liability payment request received from API or operator.
   2. `ACCOUNT_QUALIFIED`: Verifies source account has sufficient available balance.
   3. `PREDICTIVE_RECALL_EXECUTED`: Pulls required cash from USYC if invested.
-  4. `CLEARANCE_GRANTED` or `SPRS_APPROVAL_REQUIRED`: Evaluated by [PolicyComplianceLlmAgent](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/agents/policyComplianceLlmAgent.ts).
+  4. `CLEARANCE_GRANTED` or `SPRS_APPROVAL_REQUIRED`: Evaluated by [PolicyComplianceLlmAgent](../src/agents/policyComplianceLlmAgent.ts).
   5. `FIAT_OR_CRYPTO_EXECUTED`: Broadcasts payment to target rail.
   6. `WITNESSED_AND_COMPLETED`: Appends voucher to Master System Journal.
   7. **Cross-Trigger to Machine 3**: Prompts post-payment yield rebalancing.
@@ -178,7 +178,7 @@ stateDiagram-v2
 
 ## 4. Master Orchestrator & Cross-Machine Wiring
 
-The [TreasuryStateMachineOrchestrator](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/treasuryStateMachineOrchestrator.ts) unifies the 5 state machines into an unbroken closed loop:
+The [TreasuryStateMachineOrchestrator](../src/orchestration/treasuryStateMachineOrchestrator.ts) unifies the 5 state machines into an unbroken closed loop:
 
 ```typescript
 export class TreasuryStateMachineOrchestrator {
@@ -219,7 +219,7 @@ export class TreasuryStateMachineOrchestrator {
 
 ## 5. Autonomous Daemon Runtime & Physical Triggers
 
-Managed by [TreasuryDaemon](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/daemon/treasuryDaemon.ts), the system runs three continuous background processes:
+Managed by [TreasuryDaemon](../src/daemon/treasuryDaemon.ts), the system runs three continuous background processes:
 
 ```mermaid
 graph TD
@@ -237,14 +237,14 @@ graph TD
 
 1. **SystemHttpServer**: Listens for external events, webhooks (Circle Mint, ERP), and manual requests.
 2. **ArcEventListener**: Listens for onchain USDC transfers. Inbound transfers automatically trigger `AccountFundingService.reconcileDeposit()`, writing journal entries and updating dynamic records before passing balance mutation events to the orchestrator.
-3. **AutonomousSchedulerService**: Runs an autonomous tick (default: every 60 seconds) querying [LiabilityRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/liabilityRepo.ts) for scheduled liabilities approaching their execution threshold, initiating predictive recalls and disbursals.
+3. **AutonomousSchedulerService**: Runs an autonomous tick (default: every 60 seconds) querying [LiabilityRepo](../src/database/repos/liabilityRepo.ts) for scheduled liabilities approaching their execution threshold, initiating predictive recalls and disbursals.
 
 ---
 
 ## 6. Verification and Reference Files
 
-- Master Orchestrator: [treasuryStateMachineOrchestrator.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/treasuryStateMachineOrchestrator.ts)
-- Runtime Daemon: [treasuryDaemon.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/daemon/treasuryDaemon.ts)
-- State Machine Directory: [src/orchestration/stateMachines/](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/orchestration/stateMachines)
-- Scheduler Service: [autonomousSchedulerService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/autonomousSchedulerService.ts)
-- Event Listener: [arcEventListener.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/foundation/events/arcEventListener.ts)
+- Master Orchestrator: [treasuryStateMachineOrchestrator.ts](../src/orchestration/treasuryStateMachineOrchestrator.ts)
+- Runtime Daemon: [treasuryDaemon.ts](../src/daemon/treasuryDaemon.ts)
+- State Machine Directory: [src/orchestration/stateMachines/](../src/orchestration/stateMachines)
+- Scheduler Service: [autonomousSchedulerService.ts](../src/services/autonomousSchedulerService.ts)
+- Event Listener: [arcEventListener.ts](../src/foundation/events/arcEventListener.ts)

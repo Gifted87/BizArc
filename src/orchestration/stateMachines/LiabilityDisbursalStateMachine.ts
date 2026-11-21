@@ -139,19 +139,6 @@ export class LiabilityDisbursalStateMachine {
         primaryAccountId: qualification.primaryAccountId,
       });
 
-      // Autonomous Cognitive Deliberation: DisbursalRouterAgent executes tools (recall, routing, payment, GL witnessing)
-      await this.routerAgent.stageAndDisburseLiability(instanceId, {
-        accountId: liability.account_id,
-        liabilityId: liability.liability_id || "LIA-UNKNOWN",
-        title: liability.title,
-        amountUsdc: amountUsdc.toFixed(6),
-        vendorId: liability.vendor_id,
-        payoutAddress: liability.payout_address || undefined,
-        category: liability.category || "SAAS",
-        preferredPaymentRail: liability.preferred_payment_rail || "DISBURSAL_VAULT",
-        beneficiaryBankDetails: liability.payment_rail_config,
-      });
-
       // 4. Policy Compliance Gate with Keccak-256 Idempotency Key
       const idempotencyKey = this.routerAgent.generatePaymentIdempotencyKey(
         (liability.payout_address || "0x0000000000000000000000000000000000000000") as `0x${string}`,

@@ -8,6 +8,7 @@ import { LedgerWitnessService } from "./ledgerWitnessService.js";
 import { DynamicRecordsService } from "../records/dynamicRecordsService.js";
 import { MasterJournalRepo } from "../database/repos/masterJournalRepo.js";
 import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
+import { GovernanceRepo } from "../database/repos/governanceRepo.js";
 import { ARC_CONSTANTS } from "../foundation/arc/constants.js";
 
 export interface ProductionPillarCheck {
@@ -58,6 +59,21 @@ export class ProductionReadinessService {
   private static activeVaultOverride: `0x${string}` | null = null;
   private static isVaultAllowlisted = false;
 
+  public static async syncFromDb(): Promise<void> {
+    try {
+      const state = await GovernanceRepo.getGovernanceState();
+      ProductionReadinessService.circuitBreakerTriggered = state.circuit_breaker_active;
+      ProductionReadinessService.emergencyReason = state.emergency_reason || "";
+      ProductionReadinessService.emergencyTriggeredAt = state.emergency_triggered_at
+        ? new Date(state.emergency_triggered_at).toISOString()
+        : null;
+      ProductionReadinessService.activeVaultOverride = (state.active_vault_override as `0x${string}`) || null;
+      ProductionReadinessService.isVaultAllowlisted = state.is_vault_allowlisted;
+    } catch {
+      // Fallback to memory if DB query fails during bootstrap
+    }
+  }
+
   constructor(
     ledgerWitness?: LedgerWitnessService,
     dynamicRecords?: DynamicRecordsService
@@ -70,6 +86,7 @@ export class ProductionReadinessService {
    * Evaluates all 8 D23 Production Pillars against current system state and database records.
    */
   public async auditProductionReadiness(companyId?: string): Promise<ProductionReadinessReport> {
+    await ProductionReadinessService.syncFromDb();
     const blockingIssues: string[] = [];
     const warnings: string[] = [];
     const activeConfig = PolicyLoader.getActiveProfile();
@@ -378,8 +395,10 @@ export class ProductionReadinessService {
       if (!isAddress(vaultAddress)) {
         throw new Error(`[ProductionReadinessService] Invalid vaultAddress: ${vaultAddress}`);
       }
-      ProductionReadinessService.activeVaultOverride = getAddress(vaultAddress);
+      const checksummed = getAddress(vaultAddress);
+      ProductionReadinessService.activeVaultOverride = checksummed;
       ProductionReadinessService.isVaultAllowlisted = true;
+      await GovernanceRepo.setVaultOverride(checksummed, true);
     }
 
     // Load standard PRODUCTION profile from config
@@ -446,6 +465,7 @@ export class ProductionReadinessService {
 
     ProductionReadinessService.activeVaultOverride = checksummedAddress;
     ProductionReadinessService.isVaultAllowlisted = isAllowlisted;
+    await GovernanceRepo.setVaultOverride(checksummedAddress, isAllowlisted);
 
     // Mutate live active profile
     activeConfig.profile.investment_rules.target_vault = checksummedAddress;
@@ -478,6 +498,7 @@ export class ProductionReadinessService {
     ProductionReadinessService.circuitBreakerTriggered = true;
     ProductionReadinessService.emergencyReason = reason;
     ProductionReadinessService.emergencyTriggeredAt = new Date().toISOString();
+    await GovernanceRepo.setCircuitBreaker(true, reason);
 
     await MasterJournalRepo.appendEntry({
       account_id: "SYSTEM_CIRCUIT_BREAKER",
@@ -509,6 +530,7 @@ export class ProductionReadinessService {
     ProductionReadinessService.circuitBreakerTriggered = false;
     ProductionReadinessService.emergencyReason = "";
     ProductionReadinessService.emergencyTriggeredAt = null;
+    await GovernanceRepo.setCircuitBreaker(false);
 
     await MasterJournalRepo.appendEntry({
       account_id: "SYSTEM_CIRCUIT_BREAKER",

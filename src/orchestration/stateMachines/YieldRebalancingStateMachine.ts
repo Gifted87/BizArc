@@ -132,14 +132,7 @@ export class YieldRebalancingStateMachine {
         targetReserveUsdc: safeToInvestCalc.targetReserveUsdc,
       });
 
-      // 3. State: Autonomous LLM Agent Liquidity Deliberation & Tool Execution
-      await this.sentinelAgent.rebalanceAccountLiquidity(instanceId, {
-        accountId: event.accountId,
-        amountUsdc: event.amountUsdc,
-        currentLiquidBalanceUsdc: event.currentLiquidBalanceUsdc,
-        origin: event.origin,
-      });
-
+      // 3. State: Single Authoritative Vault Sweep / Recall Evaluation
       const evalResult = await this.sentinelService.onBalanceMutation(event);
 
       let finalState: YieldRebalancingState = "HYSTERESIS_SUPPRESSED";

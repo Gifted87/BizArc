@@ -1,5 +1,6 @@
 import { PublicClient, parseAbiItem } from "viem";
 import { PolicyLoader } from "../config/policyLoader.js";
+import { TenantPolicyManager } from "../config/tenantPolicyManager.js";
 import { TreasuryAccountsRepo, TreasuryAccountRecord } from "../database/repos/treasuryAccountsRepo.js";
 import { LiabilityRepo } from "../database/repos/liabilityRepo.js";
 import { AuditLogRepo } from "../database/repos/auditLogRepo.js";
@@ -107,13 +108,15 @@ export class AccountIntelligenceService {
         args: [walletAddress],
       });
       return Number(balanceRaw) / 1_000_000;
-    } catch {
+    } catch (err: any) {
       // Fallback: Check native balance converted via Arc Decimal conversion factor (10^12)
       try {
         const nativeBalance = await this.publicClient.getBalance({ address: walletAddress });
         return Number(nativeBalance / ARC_CONSTANTS.DECIMAL_CONVERSION_FACTOR) / 1_000_000;
-      } catch {
-        return 0;
+      } catch (nativeErr: any) {
+        throw new Error(
+          `Failed to read onchain USDC balance for ${walletAddress}: ${nativeErr?.message || err?.message || String(err)}`
+        );
       }
     }
   }
@@ -156,8 +159,14 @@ export class AccountIntelligenceService {
       throw new Error(`AccountIntelligenceError: Account '${accountId}' not found in database.`);
     }
 
-    const { profile } = PolicyLoader.getActiveProfile();
-    const accountPolicy = profile.operating_accounts.find((a) => a.account_id === accountId);
+    const companyId = account.company_id || "default_org";
+    let profile: any;
+    try {
+      profile = await TenantPolicyManager.getInstance().getActiveProfile(companyId);
+    } catch {
+      profile = PolicyLoader.getActiveProfile().profile;
+    }
+    const accountPolicy = profile.operating_accounts.find((a: any) => a.account_id === accountId);
     const invRules = profile.investment_rules;
 
     // 1. Fetch Balances

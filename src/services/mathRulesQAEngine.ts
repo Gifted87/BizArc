@@ -1,4 +1,5 @@
 import { MathRulesQaRepo, MathRuleQaResponseRecord } from "../database/repos/mathRulesQaRepo.js";
+import { CANONICAL_PARAM_MAPPINGS, QUESTION_ID_ALIASES } from "../config/mathRulesMapping.js";
 
 export type QuestionCategory = "GENERAL_MATH" | "ACCOUNT_MATH" | "LIABILITY_MATH" | "INVESTMENT_MATH";
 
@@ -350,6 +351,38 @@ export class MathRulesQAEngine implements IMathRulesQAEngine {
       },
     });
 
+    this.questions.push({
+      questionId: "IM_HYSTERESIS_BAND",
+      category: "INVESTMENT_MATH",
+      questionText: "What dollar buffer band should prevent rapid alternating between sweep and recall?",
+      helpText: "Ensures balances must move outside this band before initiating new transactions.",
+      responseType: "NUMBER",
+      defaultValue: 25,
+      derivedParameterName: "investHysteresisBandUsdc",
+      formulaDescription: "Hysteresis band buffer (also emits recallHysteresisBandUsdc and hysteresis_band_usdc)",
+      validate: (val) => {
+        const num = Number(val);
+        if (isNaN(num) || num <= 0) return { valid: false, error: "Must be greater than zero." };
+        return { valid: true };
+      },
+    });
+
+    this.questions.push({
+      questionId: "GM_TAX_HOLDBACK_PERCENTAGE",
+      category: "GENERAL_MATH",
+      questionText: "What percentage of net revenue should be earmarked and held back for corporate tax liabilities?",
+      helpText: "Automatically withheld in tax reserves during operational sweeps.",
+      responseType: "PERCENTAGE",
+      defaultValue: 15,
+      derivedParameterName: "taxHoldbackPercentage",
+      formulaDescription: "Tax holdback reserve percentage",
+      validate: (val) => {
+        const num = Number(val);
+        if (isNaN(num) || num < 0 || num > 100) return { valid: false, error: "Must be between 0% and 100%." };
+        return { valid: true };
+      },
+    });
+
     // ======================================================================================
     // 5. Section 8.1 Complete Q&A Catalog Canonical IDs (complete-analysis.md)
     // ======================================================================================
@@ -549,12 +582,25 @@ export class MathRulesQAEngine implements IMathRulesQAEngine {
       answerMap.set(a.questionId, a.answer);
     }
 
+    const processedQuestionIds = new Set<string>();
+
     for (const q of this.questions) {
-      if (!answerMap.has(q.questionId)) {
+      let rawAnswer = answerMap.get(q.questionId);
+      const aliasId = QUESTION_ID_ALIASES[q.questionId];
+      if (rawAnswer === undefined && aliasId) {
+        rawAnswer = answerMap.get(aliasId);
+      }
+
+      if (rawAnswer === undefined) {
         continue; // Optional answer or question from a different step
       }
 
-      const rawAnswer = answerMap.get(q.questionId);
+      if (processedQuestionIds.has(q.questionId) || (aliasId && processedQuestionIds.has(aliasId))) {
+        continue;
+      }
+      processedQuestionIds.add(q.questionId);
+      if (aliasId) processedQuestionIds.add(aliasId);
+
       const valResult = q.validate(rawAnswer);
       if (!valResult.valid) {
         throw new Error(`[MathRulesQAEngine] Validation error for question '${q.questionId}': ${valResult.error}`);
@@ -598,17 +644,56 @@ export class MathRulesQAEngine implements IMathRulesQAEngine {
     results: AnswerEvaluationResult[],
     metadata?: { accountId?: string | null; liabilityId?: string | null }
   ): Promise<void> {
-    const records: MathRuleQaResponseRecord[] = results.map((r) => ({
-      company_id: companyId,
-      account_id: metadata?.accountId || null,
-      liability_id: metadata?.liabilityId || null,
-      category: r.category,
-      question_id: r.questionId,
-      question_text: r.questionText,
-      user_answer: String(r.userAnswer),
-      derived_parameter_name: r.derivedParameterName,
-      derived_value: r.derivedValue,
-    }));
+    const records: MathRuleQaResponseRecord[] = [];
+
+    for (const r of results) {
+      records.push({
+        company_id: companyId,
+        account_id: metadata?.accountId || null,
+        liability_id: metadata?.liabilityId || null,
+        category: r.category,
+        question_id: r.questionId,
+        question_text: r.questionText,
+        user_answer: String(r.userAnswer),
+        derived_parameter_name: r.derivedParameterName,
+        derived_value: r.derivedValue,
+      });
+
+      // Also persist canonical aliases so TenantPolicyManager finds both names
+      const mapping = CANONICAL_PARAM_MAPPINGS[r.derivedParameterName];
+      if (mapping) {
+        for (const alias of mapping.aliases) {
+          if (alias !== r.derivedParameterName) {
+            records.push({
+              company_id: companyId,
+              account_id: metadata?.accountId || null,
+              liability_id: metadata?.liabilityId || null,
+              category: r.category,
+              question_id: r.questionId,
+              question_text: r.questionText,
+              user_answer: String(r.userAnswer),
+              derived_parameter_name: alias,
+              derived_value: r.derivedValue,
+            });
+          }
+        }
+      }
+
+      // Special case for hysteresis: investHysteresisBandUsdc also defines recallHysteresisBandUsdc
+      if (r.derivedParameterName === "investHysteresisBandUsdc" || r.derivedParameterName === "hysteresis_band_usdc") {
+        records.push({
+          company_id: companyId,
+          account_id: metadata?.accountId || null,
+          liability_id: metadata?.liabilityId || null,
+          category: r.category,
+          question_id: r.questionId,
+          question_text: r.questionText,
+          user_answer: String(r.userAnswer),
+          derived_parameter_name: "recallHysteresisBandUsdc",
+          derived_value: r.derivedValue,
+        });
+      }
+    }
 
     await MathRulesQaRepo.recordBatch(records);
   }

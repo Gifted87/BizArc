@@ -7,12 +7,14 @@ import { DisbursalRouteQualification } from "./disbursalRouterService.js";
 export interface ErpSyncResult {
   erpNext?: {
     success: boolean;
-    paymentEntryDocName: string;
+    paymentEntryDocName?: string;
+    error?: string;
     syncedAt: string;
   };
   odoo?: {
     success: boolean;
-    paymentId: number;
+    paymentId?: number;
+    error?: string;
     syncedAt: string;
   };
   threeWayMatchVerified: boolean;
@@ -58,9 +60,9 @@ export class ErpReconciliationService {
     const threeWayMatchVerified = hasPo;
 
     // 1. Post document-linked Payment Entry to ERPNext (Rule 1)
-    let erpNextResult: { success: boolean; docName: string };
+    let erpNextResult: { success: boolean; docName?: string; error?: string };
     try {
-      erpNextResult = await this.erpNext.postPaymentEntry({
+      const res = await this.erpNext.postPaymentEntry({
         purchase_invoice_id: qualification.invoiceId,
         paid_amount: numAmount,
         reference_no: txHash,
@@ -69,23 +71,33 @@ export class ErpReconciliationService {
         payment_type: "Pay",
         reference_date: new Date().toISOString().split("T")[0],
       });
-    } catch {
-      erpNextResult = {
-        success: true,
-        docName: `PE-STAGED-${Date.now()}-${qualification.invoiceId}`,
-      };
+      erpNextResult = { success: true, docName: res.docName };
+    } catch (err: any) {
+      if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+        console.warn(`[ErpReconciliationService] LOUD WARNING: Simulating ERPNext sync in test mode.`);
+        erpNextResult = { success: true, docName: `PE-STAGED-${Date.now()}-${qualification.invoiceId}` };
+      } else {
+        erpNextResult = { success: false, error: err.message };
+      }
     }
 
     // 2. Register document-linked payment in Odoo (Rule 1 account.move)
-    let odooResult: { success: boolean; paymentId: number };
+    let odooResult: { success: boolean; paymentId?: number; error?: string };
     try {
-      odooResult = await this.odoo.registerPayment(1001, numAmount, txHash);
-    } catch {
-      odooResult = {
-        success: true,
-        paymentId: Math.floor(Math.random() * 10000) + 1000,
-      };
+      const res = await this.odoo.registerPayment(1001, numAmount, txHash);
+      odooResult = { success: true, paymentId: res.paymentId };
+    } catch (err: any) {
+      if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+        console.warn(`[ErpReconciliationService] LOUD WARNING: Simulating Odoo sync in test mode.`);
+        odooResult = { success: true, paymentId: Math.floor(Math.random() * 10000) + 1000 };
+      } else {
+        odooResult = { success: false, error: err.message };
+      }
     }
+
+    const isFullySynced = erpNextResult.success && odooResult.success;
+    const isPartiallySynced = erpNextResult.success || odooResult.success;
+    const syncStatus: "SYNCED" | "FAILED" = isFullySynced ? "SYNCED" : "FAILED";
 
     // 3. Persist Immutable Sync State to erp_sync_state
     const syncId = `SYNC_${qualification.invoiceId}_${Date.now()}`;
@@ -97,8 +109,10 @@ export class ErpReconciliationService {
       journalHash,
       journalSequenceId,
       threeWayMatchVerified,
-      erpNextDocName: erpNextResult.docName,
-      odooPaymentId: odooResult.paymentId,
+      erpNextDocName: erpNextResult.docName || null,
+      erpNextError: erpNextResult.error || null,
+      odooPaymentId: odooResult.paymentId || null,
+      odooError: odooResult.error || null,
       allocations: qualification.allocations.map((a) => ({
         accountId: a.accountId,
         allocatedAmountUsdc: a.allocatedAmountUsdc,
@@ -111,24 +125,26 @@ export class ErpReconciliationService {
       account_id: primaryAccountId,
       entity_type: "PAYMENT_ENTRY",
       last_sync_timestamp: new Date(),
-      last_synced_document_id: erpNextResult.docName,
+      last_synced_document_id: erpNextResult.docName || "UNSYNCED",
       sync_checkpoint_data: checkpointData,
-      status: "SYNCED",
+      status: syncStatus,
     });
 
     return {
       erpNext: {
         success: erpNextResult.success,
         paymentEntryDocName: erpNextResult.docName,
+        error: erpNextResult.error,
         syncedAt: new Date().toISOString(),
       },
       odoo: {
         success: odooResult.success,
         paymentId: odooResult.paymentId,
+        error: odooResult.error,
         syncedAt: new Date().toISOString(),
       },
       threeWayMatchVerified,
-      status: "SYNCED",
+      status: syncStatus,
       checkpointRecord,
     };
   }

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import yaml from "yaml";
 import { BusinessPolicyConfig, PolicyProfile } from "../types/policy.js";
+import { GovernanceRepo } from "../database/repos/governanceRepo.js";
 
 export class PolicyValidationError extends Error {
   constructor(message: string) {
@@ -16,10 +17,21 @@ export class PolicyLoader {
 
   public static setDynamicProfile(profile: PolicyProfile, profileName: string = "DYNAMIC_ONBOARDED"): void {
     this.dynamicProfile = { profileName, profile };
+    GovernanceRepo.setDynamicPolicy(profileName, profile).catch(() => {});
   }
 
   public static clearDynamicProfile(): void {
     this.dynamicProfile = null;
+    GovernanceRepo.clearDynamicPolicy().catch(() => {});
+  }
+
+  public static async loadDynamicProfileFromDb(): Promise<void> {
+    try {
+      const saved = await GovernanceRepo.getDynamicPolicy();
+      if (saved) {
+        this.dynamicProfile = saved;
+      }
+    } catch {}
   }
 
   public static loadConfig(filePath?: string): BusinessPolicyConfig {

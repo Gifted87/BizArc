@@ -89,11 +89,14 @@ export class PredictiveRefunderService {
     executor?: ArcTransactionExecutor;
   }) {
     this.dynamicRecords = options?.dynamicRecords ?? new DynamicRecordsService();
-    const { profile } = PolicyLoader.getActiveProfile();
-    const vaultAddr =
-      options?.vaultAddress ??
-      (profile.investment_rules?.target_vault as `0x${string}`) ??
-      "0x5555555555555555555555555555555555555555";
+    let vaultAddr = options?.vaultAddress;
+    if (!vaultAddr) {
+      try {
+        const { profile } = PolicyLoader.getActiveProfile();
+        vaultAddr = (profile.investment_rules?.target_vault as `0x${string}`);
+      } catch {}
+    }
+    vaultAddr = vaultAddr ?? "0x5555555555555555555555555555555555555555";
     this.vaultService = options?.vaultService ?? new CentralTreasuryYieldVaultService(vaultAddr);
     this.witnessService = options?.witnessService ?? new LedgerWitnessService();
     this.executor = options?.executor;

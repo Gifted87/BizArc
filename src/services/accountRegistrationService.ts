@@ -48,6 +48,10 @@ export class AccountRegistrationService {
     this.adminWalletAdapter = params?.adminWalletAdapter;
   }
 
+  public setAdminWalletAdapter(adapter: ViemWalletAdapter): void {
+    this.adminWalletAdapter = adapter;
+  }
+
   /**
    * Synchronizes all operating accounts from the active Business Policy profile into PostgreSQL.
    */

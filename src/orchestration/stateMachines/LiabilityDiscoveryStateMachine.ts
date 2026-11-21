@@ -232,26 +232,29 @@ export class LiabilityDiscoveryStateMachine {
         }
       }
 
-      // 4. Branching State Transition
+      // 4. Branching State Transition (Deduplicated against previous tool staging)
       const initialStatus = isPriceCreep ? "AWAITING_APPROVAL" : "SCHEDULED";
       const rail = payload.preferredPaymentRail || (isFiat ? "FIAT_PAYOUT" : "DISBURSAL_VAULT");
 
-      const createdLiab = await LiabilityRepo.createLiability({
-        account_id: accountId,
-        company_id: payload.companyId,
-        vendor_id: payload.vendorId,
-        title: `${payload.vendorName || payload.vendorId} Invoice ${payload.invoiceId}`,
-        category: "SAAS",
-        amount_usdc: payload.amountUsdc,
-        due_date: new Date(payload.dueDate),
-        payout_address: normalizedAddress || payload.payoutAddress || null,
-        source_po_hash: payload.poReference || `PO-${payload.vendorId}`,
-        source_invoice_hash: `INV-${payload.invoiceId}`,
-        status: initialStatus,
-        preferred_payment_rail: rail,
-        payment_sub_method: payload.beneficiaryBankDetails?.paymentSubMethod || null,
-        payment_rail_config: payload.beneficiaryBankDetails || {},
-      });
+      let createdLiab = await LiabilityRepo.getLiabilityByInvoiceHash(`INV-${payload.invoiceId}`);
+      if (!createdLiab) {
+        createdLiab = await LiabilityRepo.createLiability({
+          account_id: accountId,
+          company_id: payload.companyId,
+          vendor_id: payload.vendorId,
+          title: `${payload.vendorName || payload.vendorId} Invoice ${payload.invoiceId}`,
+          category: "SAAS",
+          amount_usdc: payload.amountUsdc,
+          due_date: new Date(payload.dueDate),
+          payout_address: normalizedAddress || payload.payoutAddress || null,
+          source_po_hash: payload.poReference || `PO-${payload.vendorId}`,
+          source_invoice_hash: `INV-${payload.invoiceId}`,
+          status: initialStatus,
+          preferred_payment_rail: rail,
+          payment_sub_method: payload.beneficiaryBankDetails?.paymentSubMethod || null,
+          payment_rail_config: payload.beneficiaryBankDetails || {},
+        });
+      }
 
       if (isPriceCreep) {
         const reqId = `SPRS-CREEP-${createdLiab.liability_id}-${Date.now()}`;

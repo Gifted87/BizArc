@@ -1,0 +1,6 @@
+{
+  "name": "BizArc Treasury · Halcyon Robotics",
+  "description": "Ledger-first autonomous treasury management platform for Halcyon Robotics Inc., featuring tripartite solvency balancing, human approval gates (SPRS), and cryptographic audit trail.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

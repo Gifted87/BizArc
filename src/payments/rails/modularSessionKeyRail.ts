@@ -66,27 +66,19 @@ export class ModularSessionKeyRail {
     sessionKeyId?: string
   ): Promise<UniversalDisbursalExecutionResult> {
     const keyId = sessionKeyId || intent.sessionKeyId || `session_${intent.vendorId}`;
-    let record = await SessionKeyRepo.getSessionKeyById(keyId);
+    const record = await SessionKeyRepo.getSessionKeyById(keyId);
 
     if (!record) {
-      const cycleSec = 30 * 86400;
-      const validUntil = Math.floor(Date.now() / 1000) + 365 * 86400;
-      if (!intent.payoutAddress || !intent.payoutAddress.startsWith("0x")) {
-        throw new Error(`[ModularSessionKeyRail] INVALID_PAYOUT_ADDRESS: Rail 2 requires a valid 0x destination address. Received: '${intent.payoutAddress}'`);
-      }
-      const payout = intent.payoutAddress as `0x${string}`;
-      const pubKey = `0x${crypto.createHash("sha256").update(`${intent.primaryAccountId}:${keyId}`).digest("hex")}`;
-      record = await SessionKeyRepo.upsertSessionKey({
-        session_key_id: keyId,
-        account_id: intent.primaryAccountId,
-        allowed_recipient: payout,
-        max_amount_per_cycle_usdc: Math.max(1000.0, intent.amountUsdc * 2),
-        cycle_duration_seconds: cycleSec,
-        current_cycle_spent_usdc: 0,
-        valid_until_timestamp: validUntil,
-        public_key_hex: pubKey,
-        is_active: true,
-      });
+      return {
+        intentId: intent.intentId,
+        rail: "MODULAR_SESSION_KEY",
+        success: false,
+        status: "REJECTED_BY_POLICY",
+        totalAmountUsdc: intent.amountUsdc,
+        allocations,
+        executionTimestamp: new Date().toISOString(),
+        error: `SESSION_KEY_NOT_FOUND: Scoped session key '${keyId}' does not exist in registry. Auto-creation of unauthorized session keys is strictly prohibited.`,
+      };
     }
 
     // Invariant 1: Recipient address validation (Payee substitution defense)
@@ -167,29 +159,23 @@ export class ModularSessionKeyRail {
       }
       if (!confirmedTx) throw new Error(`Bundler accepted UserOperation ${userOpHash}, but it was not included within 20 seconds.`);
       transactionHash = confirmedTx;
+    } else if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+      console.warn(`[ModularSessionKeyRail] LOUD WARNING: SIMULATING BUNDLED USEROPERATION in test mode.`);
+      transactionHash = `0x${Date.now().toString(16).padStart(64, "0")}` as `0x${string}`;
     } else {
-      // Direct Arc L1 scoped session key execution via ArcTransactionExecutor
-      const executor = this.executor ?? new ArcTransactionExecutor();
-      const amountBigInt = BigInt(Math.floor(intent.amountUsdc * 1_000_000));
-      const execution = await executor.execute({
-        targetContract: ARC_CONSTANTS.USDC_PREDEPLOY,
-        abi: [
-          {
-            type: "function",
-            name: "transfer",
-            inputs: [
-              { name: "to", type: "address" },
-              { name: "amount", type: "uint256" },
-            ],
-            outputs: [{ name: "", type: "bool" }],
-            stateMutability: "nonpayable",
-          },
-        ],
-        functionName: "transfer",
-        args: [record.allowed_recipient as `0x${string}`, amountBigInt],
-        idempotencyKey: `0x${crypto.createHash("sha256").update(`SESSION_KEY:${keyId}:${intent.intentId}:${nowSec}`).digest("hex")}` as `0x${string}`,
-      });
-      transactionHash = execution.txHash;
+      return {
+        intentId: intent.intentId,
+        rail: "MODULAR_SESSION_KEY",
+        success: false,
+        status: "REJECTED_BY_POLICY",
+        totalAmountUsdc: intent.amountUsdc,
+        allocations,
+        sessionKeyId: keyId,
+        executionTimestamp: new Date().toISOString(),
+        error: !bundlerUrl
+          ? "ERC-4337 bundler URL (BIZARC_BUNDLER_URL) is not configured. EOA transfer fallbacks are strictly prohibited."
+          : `Valid ERC-4337 UserOperation signed with session key '${keyId}' is required. Unsigned or raw EOA transfers are strictly rejected.`,
+      };
     }
 
     // Update persistent cycle spending in PostgreSQL

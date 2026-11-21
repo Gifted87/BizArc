@@ -25,7 +25,7 @@ Traditional treasury teams face an irreconcilable tradeoff:
 
 ### 2.2 The BizArc Solution: Algorithmic USYC Mobility
 
-BizArc maintains an institutional yield facility via the [CentralTreasuryYieldVault](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/contracts/centralTreasuryYieldVaultService.ts) deployed on Arc L1. The vault interfaces with **Hashnote USYC** (ERC-4626 tokenized short-term US Treasury bills), delivering daily yield compounding while enabling instantaneous, sub-second liquidity redemption.
+BizArc maintains an institutional yield facility via the [CentralTreasuryYieldVault](../src/contracts/centralTreasuryYieldVaultService.ts) deployed on Arc L1. The vault interfaces with **Hashnote USYC** (ERC-4626 tokenized short-term US Treasury bills), delivering daily yield compounding while enabling instantaneous, sub-second liquidity redemption.
 
 To manage idle capital without ever risking operational insolvency, BizArc's agents maintain **Two Dynamic Records** and an unbroken **Parallel Tripartite Balance**:
 
@@ -53,12 +53,12 @@ graph TD
 ```
 
 #### A. Dynamic Record 1: Account Liabilities & Due Dates
-Managed by the [DynamicRecordsService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/records/dynamicRecordsService.ts) and backed by the `account_liabilities` table in PostgreSQL:
+Managed by the [DynamicRecordsService](../src/records/dynamicRecordsService.ts) and backed by the `account_liabilities` table in PostgreSQL:
 - Maintains an up-to-the-second registry of every active liability, debt obligation, and recurring SaaS subscription linked to each specific corporate account.
 - Tracks exact payment dates, recurrence intervals (Cron schedules), counterparty identities, and pre-flight lead times.
 
 #### B. Dynamic Record 2: Safe-to-Invest Calculation
-Continuously computed by the [DynamicRecordsService.calculateSafeToInvest](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/records/dynamicRecordsService.ts#L104-L185):
+Continuously computed by the [DynamicRecordsService.calculateSafeToInvest](../src/records/dynamicRecordsService.ts#L104-L185):
 
 $$\text{Safe-to-Invest} = \max\left(0,\, B_L - \left(\sum_{i \in \text{Horizon}} \text{Liability}_i \times \text{Buffer Ratio}\right) - \text{Floor}\right)$$
 
@@ -71,7 +71,7 @@ Where:
 #### C. Continuous Recalculation & Immediate Sweeps
 - **Anytime the balance changes**—whether from external customer funding, invoice receipts, faucet drips, or an outgoing expenditure—the system instantly recomputes Dynamic Record 2.
 - If $\text{Safe-to-Invest} > 0$ and exceeds the configured sweep threshold ($H_{\text{sweep}}$), the surplus funds are **immediately and autonomously transferred** to the Central USYC Investment Account.
-- **Segregation of Duties**: While the [TreasurySentinelService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/treasurySentinelService.ts) executes the onchain sweep, an independent agent—the [LedgerWitnessService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/ledgerWitnessService.ts)—independently observes the Arc L1 blockchain, validates the receipt, and updates the double-entry ledger.
+- **Segregation of Duties**: While the [TreasurySentinelService](../src/services/treasurySentinelService.ts) executes the onchain sweep, an independent agent—the [LedgerWitnessService](../src/services/ledgerWitnessService.ts)—independently observes the Arc L1 blockchain, validates the receipt, and updates the double-entry ledger.
 
 #### D. Parallel Record of Effective Available Balance
 To prevent false insolvency rejections during transaction planning:
@@ -100,7 +100,7 @@ Modern enterprises utilize hundreds of third-party software subscriptions (AWS, 
 
 ### 3.2 The BizArc Solution: Proactive Radar & Standardized Governance
 
-BizArc deploys a dedicated [LiabilityRadarService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/liabilityRadarService.ts) that maintains global overview across all corporate accounts and liabilities:
+BizArc deploys a dedicated [LiabilityRadarService](../src/services/liabilityRadarService.ts) that maintains global overview across all corporate accounts and liabilities:
 
 ```mermaid
 sequenceDiagram
@@ -130,7 +130,7 @@ sequenceDiagram
 - The agent continuously aggregates and manages every account's liability schedule, including recurring SaaS subscriptions, infrastructure bills, recurring supplier invoices, and debt amortizations.
 - Every liability is explicitly mapped to:
   1. The assigned source account (e.g., `OPEX_DEV`, `OPEX_GROWTH`, `PAYROLL`).
-  2. The verified vendor counterparty from [VendorMasterRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorMasterRepo.ts).
+  2. The verified vendor counterparty from [VendorMasterRepo](../src/database/repos/vendorMasterRepo.ts).
   3. The exact Cron frequency and due date.
   4. The preferred settlement rail (DisbursalVault, Session Key, ERC-3009, x402, or Fiat Payout).
 
@@ -156,7 +156,7 @@ If the target account lacks sufficient funds and requires pulling capital from a
 - The projected post-transfer balances for both accounts.
 
 #### E. Standardized Agent Log Specification
-Every notification, admin decision, cancellation memo, and financial movement is immutably logged according to the Standardized Agent Log Specification in `account_agent_audit_log` ([AuditLogRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/auditLogRepo.ts)).
+Every notification, admin decision, cancellation memo, and financial movement is immutably logged according to the Standardized Agent Log Specification in `account_agent_audit_log` ([AuditLogRepo](../src/database/repos/auditLogRepo.ts)).
 
 ---
 
@@ -201,20 +201,20 @@ graph TD
 ```
 
 #### A. The Transient Disbursal Account ($0 at Rest)
-BizArc introduces a specialized clearinghouse mechanism: the [DisbursalVault](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/contracts/disbursalVaultService.ts) on Arc L1.
+BizArc introduces a specialized clearinghouse mechanism: the [DisbursalVault](../src/contracts/disbursalVaultService.ts) on Arc L1.
 - **Holds $0 balance at rest**: The disbursal account never retains idle funds.
 - Funds are only moved into the Disbursal Vault **temporarily and atomically** at the moment of payment execution.
 - Upon receipt of funds, the contract immediately disperses the payment to the vendor's verified payout address and returns its balance to zero.
 - This eliminates custody risk on clearing accounts and provides a single, deterministic audit trail for all outgoing disbursements.
 
 #### B. Unified Asset Distribution UI
-The [UnifiedAssetAggregatorService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/unifiedAssetAggregatorService.ts) presents corporate officers with a single, real-time dashboard displaying:
+The [UnifiedAssetAggregatorService](../src/services/unifiedAssetAggregatorService.ts) presents corporate officers with a single, real-time dashboard displaying:
 - Total enterprise treasury assets ($B_E = \sum B_{E,\text{accounts}}$).
 - Distribution across liquid operating cash ($B_L$), invested USYC yield ($B_Y$), and currency denominations.
 - Unencumbered free capital vs. committed 30-day liabilities per account.
 
 #### C. Smart Account Qualification & Movement Rules
-When a payment obligation is due, the [DisbursalRouterService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/disbursalRouterService.ts#L170-L310) algorithmically evaluates candidate accounts:
+When a payment obligation is due, the [DisbursalRouterService](../src/services/disbursalRouterService.ts#L170-L310) algorithmically evaluates candidate accounts:
 1. **Category & Role Matching**: Maps the payment category (e.g., `INFRASTRUCTURE`, `MARKETING`, `LEGAL`) to authorized account roles.
 2. **Inviolable Payroll Shield**: Accounts designated with the `PAYROLL` role are strictly prohibited from funding non-payroll expenses, regardless of available balance.
 3. **Single-Account Qualification**: The agent identifies if any single compatible account has sufficient unencumbered free capital ($\text{Liquid} + \text{USYC} - \text{Committed Liabilities} \ge \text{Payment}$). If qualified, funds are staged from that single account.
@@ -238,7 +238,7 @@ The system enforces a dual-layer boundary dividing operations into **"Inside the
 | :--- | :--- | :--- |
 | **Operational Definition** | Routine treasury optimization strictly within pre-authorized mathematical bounds and verified vendor schedules. | Any action exceeding spending limits, transferring across cost centers, converting crypto to fiat, or altering master records. |
 | **Permitted Actions** | 1. Sweeping idle surplus cash to Central USYC Vault.<br/>2. Recalling USYC funds to cover pre-approved liabilities.<br/>3. Routine scheduled payments $\le$ auto-pay ceiling to verified Vendor Master counterparties. | 1. Inter-account fund transfers.<br/>2. Multi-account waterfall allocations.<br/>3. Crypto-to-fiat conversions.<br/>4. Payments exceeding single-transaction caps.<br/>5. Unregistered vendors or changed payout addresses. |
-| **Authorization Layer** | **Layer 1: Enforcer Agent ([PolicyComplianceLlmAgent](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/agents/policyComplianceLlmAgent.ts))** issues a single-use, cryptographic clearance code. | **Layer 2: Human Officer (CFO / Admin)** signs an EIP-712 Standardized Permission Request (SPRS). |
+| **Authorization Layer** | **Layer 1: Enforcer Agent ([PolicyComplianceLlmAgent](../src/agents/policyComplianceLlmAgent.ts))** issues a single-use, cryptographic clearance code. | **Layer 2: Human Officer (CFO / Admin)** signs an EIP-712 Standardized Permission Request (SPRS). |
 | **Agent Autonomy** | Agent acts autonomously and records the action immediately. | Agent CANNOT execute; it pauses and awaits human sign-off. |
 | **Audit Logging** | Instant append to Account Agent Log and Master Journal. | Full SPRS payload and human signature recorded in Audit Log. |
 
@@ -263,7 +263,7 @@ flowchart TD
 ```
 
 ### 5.1 Standardized Permission Request (SPRS) Specification
-When an action falls "Outside the Rules", the agent constructs a strictly formatted SPRS payload ([StandardizedPermissionRequest](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/types/sprs.ts)):
+When an action falls "Outside the Rules", the agent constructs a strictly formatted SPRS payload ([StandardizedPermissionRequest](../src/types/sprs.ts)):
 1. **Action & Reason**: Explicit action type (`DISBURSEMENT_PAYMENT`, `CROSS_ACCOUNT_REBALANCE`, etc.) and natural-language justification.
 2. **Affected Accounts & Roles**: Detailed summary of all source and destination accounts, including addresses, roles, liquid balance, USYC balance, total effective balance, committed 30-day liabilities, and projected post-transaction balances.
 3. **Counterparty Verification**: Vendor identity, claimed destination address, and verification status against the immutable Vendor Master Registry.
@@ -274,10 +274,10 @@ When an action falls "Outside the Rules", the agent constructs a strictly format
 
 ### 5.2 Dual-Level Audit Logging
 Auditability is enforced across two complementary layers:
-1. **Per-Account Agent Log** (`account_agent_audit_log` via [AuditLogRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/auditLogRepo.ts)):
+1. **Per-Account Agent Log** (`account_agent_audit_log` via [AuditLogRepo](../src/database/repos/auditLogRepo.ts)):
    - Maintains a chronological timeline for each individual corporate account.
    - Records every timed agent action, transaction hash, timestamp, pre-state snapshot, post-state snapshot, and associated SPRS ID.
-2. **Central Master Sequential Journal** (`master_system_journal` via [MasterJournalRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/masterJournalRepo.ts)):
+2. **Central Master Sequential Journal** (`master_system_journal` via [MasterJournalRepo](../src/database/repos/masterJournalRepo.ts)):
    - Global double-entry journal recording all debits and credits across all corporate accounts sequentially.
    - Secured by **cryptographic SHA-256 hash chaining**:
      $$H_n = \text{SHA-256}(H_{n-1} \parallel \text{AccountId} \parallel \text{Action} \parallel \text{Debit} \parallel \text{Credit} \parallel \text{Amount} \parallel \text{Timestamp})$$
@@ -287,7 +287,7 @@ Auditability is enforced across two complementary layers:
 
 ## 6. The Four Core Agent Capabilities & Tools
 
-BizArc equips its cognitive LLM agent swarm with four primary capabilities and over 30 deterministic tools ([ToolRegistry](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/tools/toolRegistry.ts)):
+BizArc equips its cognitive LLM agent swarm with four primary capabilities and over 30 deterministic tools ([ToolRegistry](../src/tools/toolRegistry.ts)):
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -355,10 +355,10 @@ graph TD
 ```
 
 ### 7.1 Path A: Manual Interactive Onboarding Wizard
-Guided by [OnboardingWizardService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/onboardingWizardService.ts):
+Guided by [OnboardingWizardService](../src/services/onboardingWizardService.ts):
 1. **Step 1: Company Profile**: Legal entity name, jurisdiction, reporting currency, tax ID, and business description.
 2. **Step 2: Mathematical Rules via Q&A Engine**:
-   - Instead of writing complex formulas, administrators answer structured questions administered by the [MathRulesQAEngine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/mathRulesQAEngine.ts).
+   - Instead of writing complex formulas, administrators answer structured questions administered by the [MathRulesQAEngine](../src/services/mathRulesQAEngine.ts).
    - Covers: target cash runway (months), estimated 30-day net operating burn, base operating floors, safety buffer ratios, and investment allocation percentages.
    - System automatically derives mathematical policy parameters.
 3. **Step 3: Declared Policies for Agent Actions**:
@@ -378,18 +378,18 @@ Guided by [OnboardingWizardService](file://wsl.localhost/Ubuntu-24.04/home/gifte
 ### 7.2 Path B: Connected Workspace & ERP Assisted Onboarding
 For enterprises with existing accounting and productivity infrastructure:
 1. **Connect Workspace / ERP**:
-   - Google Workspace or Microsoft 365 via Model Context Protocol (MCP) clients ([GoogleWorkspaceMcpClient](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/connectors/googleWorkspaceMcpClient.ts), [Microsoft365McpClient](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/connectors/microsoft365McpClient.ts)).
-   - Odoo or ERPNext via direct session authentication ([SessionErpSyncService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/connectors/sessionErpSyncService.ts)).
+   - Google Workspace or Microsoft 365 via Model Context Protocol (MCP) clients ([GoogleWorkspaceMcpClient](../src/connectors/googleWorkspaceMcpClient.ts), [Microsoft365McpClient](../src/connectors/microsoft365McpClient.ts)).
+   - Odoo or ERPNext via direct session authentication ([SessionErpSyncService](../src/connectors/sessionErpSyncService.ts)).
 2. **Autonomous Data Extraction**:
    - MCP clients and session connectors extract purchase orders, outstanding invoices, vendor master profiles, banking details, and departmental cost centers.
 3. **AI Agent Draft Pre-fill**:
-   - The [IntakeDiscoveryAgent](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/intakeDiscoveryAgent.ts) parses extracted documents and pre-populates the Onboarding Wizard form as a draft.
+   - The [IntakeDiscoveryAgent](../src/services/intakeDiscoveryAgent.ts) parses extracted documents and pre-populates the Onboarding Wizard form as a draft.
 4. **Admin Review & Modification**:
    - The admin inspects the drafted cost centers, accounts, and policies, editing any values as desired.
 5. **Mandatory Manual Liability Confirmation**:
    - The admin always reviews, configures, and attaches recurring liabilities to finalized accounts to ensure absolute operational fidelity.
 6. **100% Post-Onboarding Editability**:
-   - Every account, policy, limit, and liability remains fully editable post-onboarding via the settings management suite ([LiabilitySettingsService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/liabilitySettingsService.ts), [AccountManagementService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/accountManagementService.ts)).
+   - Every account, policy, limit, and liability remains fully editable post-onboarding via the settings management suite ([LiabilitySettingsService](../src/services/liabilitySettingsService.ts), [AccountManagementService](../src/services/accountManagementService.ts)).
 
 ---
 

@@ -2,6 +2,7 @@ import { keccak256, stringToHex } from "viem";
 import { AGENT_REGISTRY, AgentPersonaType } from "../types/agents.js";
 import { StandardizedPermissionRequest, SPROption, SPRActionType } from "../types/sprs.js";
 import { PolicyLoader } from "../config/policyLoader.js";
+import { TenantPolicyManager } from "../config/tenantPolicyManager.js";
 import { TreasuryAccountsRepo } from "../database/repos/treasuryAccountsRepo.js";
 import { PermissionRequestRepo } from "../database/repos/permissionRequestRepo.js";
 import { CentralTreasuryYieldVaultService } from "../contracts/centralTreasuryYieldVaultService.js";
@@ -193,8 +194,14 @@ export class TreasurySentinelService {
         throw new Error(`[TreasurySentinelService] Account '${accountId}' not found in registry.`);
       }
 
-      const { profile } = PolicyLoader.getActiveProfile();
-      const opPolicy = profile.operating_accounts.find((a) => a.account_id === accountId);
+      const companyId = accountRecord.company_id || "default_org";
+      let profile: any;
+      try {
+        profile = await TenantPolicyManager.getInstance().getActiveProfile(companyId);
+      } catch {
+        profile = PolicyLoader.getActiveProfile().profile;
+      }
+      const opPolicy = profile.operating_accounts.find((a: any) => a.account_id === accountId);
       const invRules = profile.investment_rules;
       const spendingLimits = profile.spending_limits;
 

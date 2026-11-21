@@ -82,4 +82,15 @@ export class CircleWalletService {
       state: tx?.state ?? "INITIATED",
     };
   }
+
+  /**
+   * Retrieves transaction status from Circle Developer Controlled Wallets.
+   */
+  public async getTransaction(id: string): Promise<any> {
+    if (!this.client) {
+      throw new Error("Circle SDK client is not configured.");
+    }
+    const response = await (this.client as any).getTransaction({ id });
+    return response.data?.transaction ?? response.data;
+  }
 }

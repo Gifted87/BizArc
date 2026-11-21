@@ -79,6 +79,7 @@ export class AccountManagementService implements IAccountManagementService {
       monthly_cap_usdc: Number(params.monthlyCapUsdc ?? 100000.0),
       authorized_categories: params.authorizedCategories ?? ["GENERAL_OPEX"],
       max_autonomous_sweep_usdc: Number(params.maxAutonomousSweepUsdc ?? (params.role === "PAYROLL" ? 0.0 : 1000.0)),
+      max_autonomous_sweep_usdc: Number(params.maxAutonomousSweepUsdc ?? (params as any).maxAutonomousSweepLimit ?? (params.role === "PAYROLL" ? 0.0 : 1000.0)),
       exclude_from_waterfall: params.role === "PAYROLL" ? true : Boolean(params.excludeFromWaterfall),
       account_declared_policies: params.accountDeclaredPolicies ?? {},
     };
@@ -136,6 +137,7 @@ export class AccountManagementService implements IAccountManagementService {
       monthly_cap_usdc: params.monthlyCapUsdc !== undefined ? Number(params.monthlyCapUsdc) : existing.monthly_cap_usdc,
       authorized_categories: params.authorizedCategories ?? existing.authorized_categories,
       max_autonomous_sweep_usdc: params.maxAutonomousSweepUsdc !== undefined ? Number(params.maxAutonomousSweepUsdc) : existing.max_autonomous_sweep_usdc,
+      max_autonomous_sweep_usdc: (params.maxAutonomousSweepUsdc ?? (params as any).maxAutonomousSweepLimit) !== undefined ? Number(params.maxAutonomousSweepUsdc ?? (params as any).maxAutonomousSweepLimit) : existing.max_autonomous_sweep_usdc,
       exclude_from_waterfall: params.excludeFromWaterfall !== undefined ? Boolean(params.excludeFromWaterfall) : existing.exclude_from_waterfall,
       account_declared_policies: params.accountDeclaredPolicies ?? existing.account_declared_policies,
     };

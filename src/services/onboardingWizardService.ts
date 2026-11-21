@@ -460,11 +460,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
     // ─────────────────────────────────────────────────────────────────────────────
     // ATOMIC TRANSACTION: PROVISION ORGANIZATION ASSETS
     // ─────────────────────────────────────────────────────────────────────────────
-    const pool = DbClient.getPool();
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-
+    await DbClient.withTransaction(async () => {
       // 1. Provision Multi-Tenant IAM Organization in tenants table
       const existingTenant = await TenantRepo.getTenantById(companyId);
       if (!existingTenant) {
@@ -691,14 +687,7 @@ export class OnboardingWizardService implements IOnboardingWizardService {
 
       // 6. Mark Wizard Session Completed
       await WizardSessionRepo.updateStatus(sessionId, "COMPLETED");
-
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
+    });
 
     // Invalidate Multi-Tenant Policy Cache
     await this.tenantPolicyManager.invalidateCache(companyId);

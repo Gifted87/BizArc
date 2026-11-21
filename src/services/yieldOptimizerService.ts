@@ -12,6 +12,10 @@ export interface EvaluationResult {
   encodedTx?: `0x${string}`;
 }
 
+/**
+ * @deprecated Superseded by TreasurySentinelService.
+ * Retained for backward compatibility with legacy offline scripts.
+ */
 export class YieldOptimizerService {
   constructor(private vaultService: CentralTreasuryYieldVaultService) {}
 

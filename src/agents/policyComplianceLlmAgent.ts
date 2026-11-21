@@ -1,6 +1,8 @@
 import { BaseLlmAgent } from "./core/BaseLlmAgent.js";
 import { DbClient } from "../database/dbClient.js";
 import { PolicyLoader } from "../config/policyLoader.js";
+import { TenantPolicyManager } from "../config/tenantPolicyManager.js";
+import { PolicyProfile, OperatingAccountPolicy } from "../types/policy.js";
 import { keccak256, encodePacked } from "viem";
 import { PermissionRequestRepo, PermissionRequestRecord } from "../database/repos/permissionRequestRepo.js";
 import { LiabilityRepo } from "../database/repos/liabilityRepo.js";
@@ -149,13 +151,20 @@ Your primary mandate is Chief Risk & Governance Gatekeeper:
 
     // 1. Tier A Check: Payroll Protection & Account Invariants
     const accRes = await DbClient.query(
-      `SELECT account_id, role, wallet_address, min_operating_floor_usdc, safety_buffer_ratio, is_active, max_autonomous_sweep_usdc 
-       FROM treasury_accounts 
+      `SELECT account_id, company_id, role, wallet_address, min_operating_floor_usdc, safety_buffer_ratio, is_active, max_autonomous_sweep_usdc
+       FROM treasury_accounts
        WHERE account_id = $1;`,
       [intent.accountId]
     );
 
     let accountRecord = accRes.rows[0];
+    const companyId = accountRecord?.company_id || "default_org";
+    let profile: PolicyProfile;
+    try {
+      profile = await TenantPolicyManager.getInstance().getActiveProfile(companyId);
+    } catch {
+      profile = PolicyLoader.getActiveProfile().profile;
+    }
     if (accountRecord) {
       const isDisbursalAction = intent.proposedAction.includes("DISBURSAL") || intent.proposedAction === "PAYMENT";
       if (accountRecord.role === "PAYROLL" && isDisbursalAction && intent.proposedAction !== "PAYROLL_DISBURSAL") {
@@ -181,8 +190,7 @@ Your primary mandate is Chief Risk & Governance Gatekeeper:
 
     // 3. Tier A Check: Reserve Floor & Hysteresis Preservation for Sweeps
     if (intent.proposedAction === "AUTONOMOUS_SWEEP") {
-      const profile = PolicyLoader.getActiveProfile().profile;
-      const opPolicy = profile.operating_accounts.find((a) => a.account_id === intent.accountId);
+      const opPolicy = profile.operating_accounts.find((a: any) => a.account_id === intent.accountId);
       const sweepLimit = opPolicy?.max_autonomous_sweep_limit ?? (accountRecord as any)?.max_autonomous_sweep_usdc;
       if (sweepLimit !== undefined && sweepLimit <= 0) {
         violations.push(
@@ -211,7 +219,6 @@ Your primary mandate is Chief Risk & Governance Gatekeeper:
     }
 
     // 4. Tier B Check: Declared Policy & Spending Caps
-    const profile = PolicyLoader.getActiveProfile().profile;
     const perTxCap =
       profile.spending_limits?.single_tx_human_gate_threshold_usdc ??
       (profile.spending_limits as any)?.per_transaction_cap_usdc ??
@@ -278,7 +285,7 @@ Your primary mandate is Chief Risk & Governance Gatekeeper:
       const dailyRes = await DbClient.query(
         `SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spent
          FROM master_system_journal
-         WHERE account_id = $1 
+         WHERE account_id = $1
            AND timestamp >= NOW() - INTERVAL '24 hours'
            AND action_type IN ('DISBURSAL_PAYMENT', 'DISBURSAL_SETTLEMENT');`,
         [intent.accountId]
@@ -416,13 +423,7 @@ Your primary mandate is Chief Risk & Governance Gatekeeper:
       // If associated with a recurring liability, cancel/freeze the liability
       const liabilityId = (request.payload as any)?.associated_records?.liability_id;
       if (liabilityId) {
-        await DbClient.query(
-          `UPDATE account_liabilities 
-           SET is_active = false, 
-               notes = COALESCE(notes, '') || ' [CANCELLED_BY_ADMIN: ' || $1 || ']'
-           WHERE liability_id = $2;`,
-          [cancellationMemo, liabilityId]
-        );
+        await LiabilityRepo.updateLiabilityStatus(liabilityId, "CANCELLED");
       }
 
       return {

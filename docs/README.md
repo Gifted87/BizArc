@@ -36,17 +36,17 @@ graph TD
 ### Problem 1: Idle Capital & Yield Mobility
 - **Problem**: Corporate money sits idle earning zero yield. It needs to be continuously invested in yield-generating assets, but must remain immediately accessible whenever payments or liabilities come due.
 - **BizArc Solution**:
-  - **Central USYC Investment Account**: Deployed on Arc L1 via [CentralTreasuryYieldVault](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/contracts/centralTreasuryYieldVaultService.ts), interfacing with Hashnote USYC (ERC-4626 tokenized US Treasury bills yielding ~5% APY).
+  - **Central USYC Investment Account**: Deployed on Arc L1 via [CentralTreasuryYieldVault](../src/contracts/centralTreasuryYieldVaultService.ts), interfacing with Hashnote USYC (ERC-4626 tokenized US Treasury bills yielding ~5% APY).
   - **Dynamic Record 1 (Account Liabilities & Dates)**: Dynamic registry of every active liability and recurring schedule per account.
   - **Dynamic Record 2 (Safe-to-Invest Margin)**: Continuously calculates safe-to-invest margin based on liquid balance, operating reserve floor, and upcoming liabilities over a forward-looking horizon.
-  - **Continuous Recalculation & Immediate Sweeps**: Recalculated anytime the balance changes from funding or disbursements; surplus funds are immediately swept to USYC on Arc L1. A separate agent ([LedgerWitnessService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/ledgerWitnessService.ts)) independently posts double-entry vouchers to the master journal.
+  - **Continuous Recalculation & Immediate Sweeps**: Recalculated anytime the balance changes from funding or disbursements; surplus funds are immediately swept to USYC on Arc L1. A separate agent ([LedgerWitnessService](../src/services/ledgerWitnessService.ts)) independently posts double-entry vouchers to the master journal.
   - **Parallel Record of Effective Available Balance**: If an account holds $20 liquid and $80 in USYC, the UI and decision engines maintain a parallel record showing **Available Balance = $100.000000 USDC** ($B_E = B_L + B_Y$). Treasury decisions evaluate this full purchasing power.
   - **Dynamic Liquidity Recall**: Whenever a payment is initiated or an obligation enters the pre-flight window, the agent automatically withdraws the exact required amount from USYC to the operating account.
 
 ### Problem 2: Subscription Sprawl Across Accounts
 - **Problem**: Enterprise subscriptions can proliferate so rapidly that administrators lose track of which account pays what, resulting in unexpected debits, zombie subscriptions, or service cutoffs.
 - **BizArc Solution**:
-  - **Global Overview Agent**: The [LiabilityRadarService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/liabilityRadarService.ts) maintains a global view across all accounts and recurring commitments (subscriptions, debts, retainers).
+  - **Global Overview Agent**: The [LiabilityRadarService](../src/services/liabilityRadarService.ts) maintains a global view across all accounts and recurring commitments (subscriptions, debts, retainers).
   - **Proactive Pre-Flight Notifications**: Scans 48 hours in advance and alerts the in-charge administrator with complete context: what is being paid, counterparty identity, amount, and the exact account scheduled to fund it.
   - **Binary Admin Framework**: Presents the admin with strictly two clear options:
     1. **`APPROVE`**: Signs off on the transaction (with EIP-712 cryptographic permit if exceeding limits).
@@ -57,9 +57,9 @@ graph TD
 ### Problem 3: Fragmented Accounts & Payment Routing
 - **Problem**: Fragmented departmental accounts make it difficult to determine which account should pay, calculate cross-account transfers, and stage funds without draining critical operational reserves.
 - **BizArc Solution**:
-  - **Transient Disbursal Account ($0 at Rest)**: Deploys [DisbursalVault](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/contracts/disbursalVaultService.ts) on Arc L1. The vault holds $0 at rest. Funds are staged into the vault temporarily only at the moment of payment and dispersed immediately to the vendor.
-  - **Unified Asset Distribution UI**: The [UnifiedAssetAggregatorService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/unifiedAssetAggregatorService.ts) aggregates and displays total enterprise assets and distribution across all accounts, roles, and yield pools.
-  - **Smart Account Qualification & Movement Rules**: The [DisbursalRouterService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/disbursalRouterService.ts) evaluates category compatibility and unencumbered free capital to qualify candidate accounts.
+  - **Transient Disbursal Account ($0 at Rest)**: Deploys [DisbursalVault](../src/contracts/disbursalVaultService.ts) on Arc L1. The vault holds $0 at rest. Funds are staged into the vault temporarily only at the moment of payment and dispersed immediately to the vendor.
+  - **Unified Asset Distribution UI**: The [UnifiedAssetAggregatorService](../src/services/unifiedAssetAggregatorService.ts) aggregates and displays total enterprise assets and distribution across all accounts, roles, and yield pools.
+  - **Smart Account Qualification & Movement Rules**: The [DisbursalRouterService](../src/services/disbursalRouterService.ts) evaluates category compatibility and unencumbered free capital to qualify candidate accounts.
   - **Multi-Account Waterfall Allocation**: If a single account cannot cover the bill, the agent evaluates a waterfall draw across compatible accounts, strictly respecting liability reserves and enforcing the **Inviolable Payroll Shield**. Cross-account draws require human approval via SPRS before funds are staged.
 
 ---
@@ -72,7 +72,7 @@ BizArc's operational architecture is built on a constitutional invariant: **No a
 | :--- | :--- | :--- |
 | **Scope** | Routine actions within pre-authorized mathematical bounds and verified schedules. | High-risk actions, inter-account transfers, crypto-to-fiat conversions, or out-of-policy limits. |
 | **Typical Actions** | 1. Sweeping idle cash surplus to Central USYC Vault.<br/>2. Recalling USYC funds for pre-approved liabilities.<br/>3. Routine scheduled payments below auto-pay threshold to verified vendors. | 1. Moving funds between corporate accounts.<br/>2. Converting crypto to fiat banking rails.<br/>3. Multi-account waterfall allocations.<br/>4. Payments exceeding single-transaction caps.<br/>5. Unregistered vendors or changed payout addresses. |
-| **Authorization Layer** | **Layer 1: Enforcer Agent ([PolicyComplianceLlmAgent](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/agents/policyComplianceLlmAgent.ts))** issues single-use clearance codes. | **Layer 2: Human Officer (CFO / Admin)** signs an EIP-712 Standardized Permission Request (SPRS). |
+| **Authorization Layer** | **Layer 1: Enforcer Agent ([PolicyComplianceLlmAgent](../src/agents/policyComplianceLlmAgent.ts))** issues single-use clearance codes. | **Layer 2: Human Officer (CFO / Admin)** signs an EIP-712 Standardized Permission Request (SPRS). |
 | **Agent Autonomy** | Agent acts autonomously and logs the transaction immediately. | Agent CANNOT execute; pauses and awaits human sign-off. |
 | **Audit Trails** | Chronological entry in Account Agent Log and Master Journal. | Complete SPRS payload, human signature, and rationale immutably recorded. |
 
@@ -121,16 +121,16 @@ graph LR
 
 | Document | Primary Focus |
 | :--- | :--- |
-| **1. [Problem, Solution & Governance Philosophy](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/problem_and_solution_philosophy.md)** | **Core Manifesto**: Detailed breakdown of the 3 Core Problems, Algorithmic Solutions, Parallel Balances, Inside vs. Outside the Rules, and Agent Capabilities. |
-| **2. [Enterprise Onboarding & Lifecycle Guide](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/enterprise_onboarding_guide.md)** | **Onboarding Manual**: Step-by-step walkthrough of Manual 6-step QA setup, Connected Workspace/ERP MCP draft prefill, liability attachment, and post-onboarding CRUD. |
-| **3. [Architecture Overview](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/architecture_overview.md)** | **System Blueprint**: Arc L1 protocol foundation, Tripartite Balance Invariant ($B_E = B_L + B_Y$), 6 Golden Rules of Enterprise Ledgers, and daemon runtime. |
-| **4. [Dual-Layer Autonomous Architecture](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/dual_layer_architecture.md)** | **Safety Cage**: Cognitive Agent Swarm (The Brain) vs. Smart Contract Guardrail Envelope (The Safety Cage) and Segregation of Duties. |
-| **5. [Agent Responsibilities & Swarm Topology](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/agent_responsibilities.md)** | **Cognitive Swarm**: Technical specification of the 6 specialized LLM agents (IDs #100–#105), Swarm Coordinator, shared blackboard, and intent lifecycle. |
-| **6. [Universal Payment Rails & Routing Guide](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/payment_rails_and_routing.md)** | **Settlement Rails**: Comprehensive specification of the 5 Universal Payment Rails (DisbursalVault, Session Keys, ERC-3009, x402, and Fiat Banking Rails). |
-| **7. [Reactive State Machines & Orchestration](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/state_machines_and_orchestration.md)** | **Runtime Engine**: Technical specification of the 5 reactive state machines, closed-loop triggers, master orchestrator, and background daemon. |
-| **8. [Security, Governance & Compliance Architecture](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/security_and_compliance.md)** | **Compliance Engine**: Two-Layer Authorization Gate, EIP-712 SPRS protocol, Anti-Payee Substitution Defense, and Loud Rounding enforcement. |
-| **9. [Database Schema, Ledger & Vector Memory](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/database_and_double_entry_ledger.md)** | **Data Architecture**: PostgreSQL relational schema (22 tables), Master System Journal with sequential SHA-256 hash chaining, and vector memory. |
-| **10. [API, Webhooks & Agent Tool Reference](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/api_and_tool_reference.md)** | **Integration & Tools**: Physical REST Ingress endpoints, Circle Mint webhooks, and 30+ deterministic tools provided by the Tool Registry. |
+| **1. [Problem, Solution & Governance Philosophy](./problem_and_solution_philosophy.md)** | **Core Manifesto**: Detailed breakdown of the 3 Core Problems, Algorithmic Solutions, Parallel Balances, Inside vs. Outside the Rules, and Agent Capabilities. |
+| **2. [Enterprise Onboarding & Lifecycle Guide](./enterprise_onboarding_guide.md)** | **Onboarding Manual**: Step-by-step walkthrough of Manual 6-step QA setup, Connected Workspace/ERP MCP draft prefill, liability attachment, and post-onboarding CRUD. |
+| **3. [Architecture Overview](./architecture_overview.md)** | **System Blueprint**: Arc L1 protocol foundation, Tripartite Balance Invariant ($B_E = B_L + B_Y$), 6 Golden Rules of Enterprise Ledgers, and daemon runtime. |
+| **4. [Dual-Layer Autonomous Architecture](./dual_layer_architecture.md)** | **Safety Cage**: Cognitive Agent Swarm (The Brain) vs. Smart Contract Guardrail Envelope (The Safety Cage) and Segregation of Duties. |
+| **5. [Agent Responsibilities & Swarm Topology](./agent_responsibilities.md)** | **Cognitive Swarm**: Technical specification of the 6 specialized LLM agents (IDs #100–#105), Swarm Coordinator, shared blackboard, and intent lifecycle. |
+| **6. [Universal Payment Rails & Routing Guide](./payment_rails_and_routing.md)** | **Settlement Rails**: Comprehensive specification of the 5 Universal Payment Rails (DisbursalVault, Session Keys, ERC-3009, x402, and Fiat Banking Rails). |
+| **7. [Reactive State Machines & Orchestration](./state_machines_and_orchestration.md)** | **Runtime Engine**: Technical specification of the 5 reactive state machines, closed-loop triggers, master orchestrator, and background daemon. |
+| **8. [Security, Governance & Compliance Architecture](./security_and_compliance.md)** | **Compliance Engine**: Two-Layer Authorization Gate, EIP-712 SPRS protocol, Anti-Payee Substitution Defense, and Loud Rounding enforcement. |
+| **9. [Database Schema, Ledger & Vector Memory](./database_and_double_entry_ledger.md)** | **Data Architecture**: PostgreSQL relational schema (22 tables), Master System Journal with sequential SHA-256 hash chaining, and vector memory. |
+| **10. [API, Webhooks & Agent Tool Reference](./api_and_tool_reference.md)** | **Integration & Tools**: Physical REST Ingress endpoints, Circle Mint webhooks, and 30+ deterministic tools provided by the Tool Registry. |
 
 ---
 

@@ -159,24 +159,39 @@ export class Erc3009AuthorizationRail {
     let s = authorization?.s;
 
     if (v === undefined || !r || !s) {
-      const privateKey =
-        (process.env.BIZARC_EXECUTOR_PRIVATE_KEY as `0x${string}`) ||
-        (process.env.TEST_ADMIN_PRIVATE_KEY as `0x${string}`) ||
-        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-      const signer = privateKeyToAccount(privateKey);
-      const typedData = this.getEIP712TypedData({
-        from: fromAddress,
-        to: toAddress,
-        value: valueBigInt,
-        validAfter: BigInt(validAfter),
-        validBefore: BigInt(validBefore),
-        nonce,
-      });
-      const sigHex = await signer.signTypedData(typedData);
-      const parsed = parseSignature(sigHex);
-      v = Number(parsed.v);
-      r = parsed.r;
-      s = parsed.s;
+      if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+        console.warn(`[Erc3009AuthorizationRail] LOUD WARNING: Self-signing ERC-3009 authorization in test mode.`);
+        const privateKey =
+          (process.env.BIZARC_EXECUTOR_PRIVATE_KEY as `0x${string}`) ||
+          (process.env.TEST_ADMIN_PRIVATE_KEY as `0x${string}`) ||
+          "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        const signer = privateKeyToAccount(privateKey);
+        const typedData = this.getEIP712TypedData({
+          from: fromAddress,
+          to: toAddress,
+          value: valueBigInt,
+          validAfter: BigInt(validAfter),
+          validBefore: BigInt(validBefore),
+          nonce,
+        });
+        const sigHex = await signer.signTypedData(typedData);
+        const parsed = parseSignature(sigHex);
+        v = Number(parsed.v);
+        r = parsed.r;
+        s = parsed.s;
+      } else {
+        return {
+          intentId: intent.intentId,
+          rail: "ERC3009_AUTHORIZATION",
+          success: false,
+          status: "REJECTED_BY_POLICY",
+          totalAmountUsdc: intent.amountUsdc,
+          allocations,
+          authorizationNonce: nonce,
+          executionTimestamp: new Date().toISOString(),
+          error: `Missing debtor cryptographic signature (v, r, s) for ERC-3009 authorization. Self-signing by relayer is strictly prohibited in production.`,
+        };
+      }
     }
 
     let txHash: `0x${string}`;
@@ -189,8 +204,23 @@ export class Erc3009AuthorizationRail {
         idempotencyKey: nonce,
       });
       txHash = execution.txHash;
-    } catch {
-      txHash = `0x${crypto.createHash("sha256").update(`ERC3009_TX:${nonce}:${nowSec}`).digest("hex")}` as `0x${string}`;
+    } catch (err: any) {
+      if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+        console.warn(`[Erc3009AuthorizationRail] LOUD WARNING: Simulating transaction hash in test mode: ${err.message}`);
+        txHash = `0x${crypto.createHash("sha256").update(`ERC3009_TX:${nonce}:${nowSec}`).digest("hex")}` as `0x${string}`;
+      } else {
+        return {
+          intentId: intent.intentId,
+          rail: "ERC3009_AUTHORIZATION",
+          success: false,
+          status: "REJECTED_BY_POLICY",
+          totalAmountUsdc: intent.amountUsdc,
+          allocations,
+          authorizationNonce: nonce,
+          executionTimestamp: new Date().toISOString(),
+          error: `ERC-3009 receiveWithAuthorization contract execution failed: ${err.message}`,
+        };
+      }
     }
 
     // Commit nonce persistently to PostgreSQL

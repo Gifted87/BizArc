@@ -8,7 +8,7 @@ The entire capability matrix and functional surface of BizArc is organized into 
 
 ## 🏛️ The Three Core Pillars
 
-### [1. Corporate Treasury Operations & Real-Time Liquidity Engine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/frontend_specs/01_treasury_and_liquidity_engine.md)
+### [1. Corporate Treasury Operations & Real-Time Liquidity Engine](../frontend_specs/01_treasury_and_liquidity_engine.md)
 * **The "Treasury & Yield Cockpit"**
 * **Parallel Tripartite Balance**: Real-time visualization of Effective Purchasing Power ($B_E = B_L + B_Y$).
 * **Safe-to-Invest Gauge (Dynamic Record 2)**: Dynamic headroom calculations, 7-day horizon countdowns, and hysteresis buffers.
@@ -22,7 +22,7 @@ The entire capability matrix and functional surface of BizArc is organized into 
 
 ---
 
-### [2. Invoices, Subscriptions & Universal 5-Rail Settlement](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/frontend_specs/02_disbursals_liabilities_and_rails.md)
+### [2. Invoices, Subscriptions & Universal 5-Rail Settlement](../frontend_specs/02_disbursals_liabilities_and_rails.md)
 * **The "Disbursals & AP Command Center"**
 * **Committed Liabilities Matrix (Dynamic Record 1)**: Calendar & list of recurring SaaS subscriptions, bills, and retainers.
 * **Ad-Hoc / Manual Disbursal Initiation Flow ("Pay Vendor Now")**: Complete guided modal for one-off vendor payments (`POST /api/disbursals/manual`) with PO/receipt document upload, route qualification, and two-layer authorization check.
@@ -44,7 +44,7 @@ The entire capability matrix and functional surface of BizArc is organized into 
 
 ---
 
-### [3. Governance, Cryptographic Gateways & System Administration](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/frontend_specs/03_security_governance_and_admin.md)
+### [3. Governance, Cryptographic Gateways & System Administration](../frontend_specs/03_security_governance_and_admin.md)
 * **The "Security, SPRS & Governance Console"**
 * **The 6-Step Enterprise Onboarding Wizard (FTUX)**: Guided setup for Pathway A (manual) and Pathway B (connected MCP/ERP), including Legal Identity, Accounts, Policies, and onchain activation (`POST /api/onboarding/session`, `POST /api/onboarding/step`, `POST /api/onboarding/activate`).
 * **Mathematical Rules Q&A Engine**: Administers intuitive business questionnaires across 4 categories (`GENERAL_MATH`, `ACCOUNT_MATH`, `LIABILITY_MATH`, `INVESTMENT_MATH`) to derive exact system reserve parameters (`GET /api/onboarding/qa/questions`, `POST /api/onboarding/qa/evaluate`).

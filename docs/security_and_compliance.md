@@ -4,7 +4,7 @@
 
 Autonomous AI agents executing financial transactions introduce novel enterprise attack vectors: hallucinated rounding, unauthorized address substitution, recursive loop depletion, and unconstrained spending.
 
-BizArc neutralizes these risks by enforcing the **Canteen Agents & Ledgers (2026)** governance model through the [AuthorizationGate](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/security/authorizationGate.ts), deterministic mathematical rules, cryptographic EIP-712 human sign-offs, and immutable onchain smart contract clearinghouses.
+BizArc neutralizes these risks by enforcing the **Canteen Agents & Ledgers (2026)** governance model through the [AuthorizationGate](../src/security/authorizationGate.ts), deterministic mathematical rules, cryptographic EIP-712 human sign-offs, and immutable onchain smart contract clearinghouses.
 
 ```mermaid
 graph TD
@@ -35,7 +35,7 @@ BizArc divides financial authority into two strict cryptographic layers:
 
 ### 2.1 Layer 1: The Enforcer Agent (PolicyComplianceAgent #104)
 - **Role**: Autonomous gatekeeper for operations that remain strictly **"Inside the Rules"**.
-- **Clearance Code Generation**: When an intent passes all checks, the Enforcer Agent issues a single-use, time-bound clearance code stored in [compliance_clearance_codes](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/clearanceCodeRepo.ts):
+- **Clearance Code Generation**: When an intent passes all checks, the Enforcer Agent issues a single-use, time-bound clearance code stored in [compliance_clearance_codes](../src/database/repos/clearanceCodeRepo.ts):
   ```typescript
   export interface ClearanceCodeRecord {
     code: string;              // Format: #CLEAR-<timestamp>-<hash>
@@ -47,7 +47,7 @@ BizArc divides financial authority into two strict cryptographic layers:
     is_consumed: boolean;      // Burned upon execution
   }
   ```
-- **One-Time Consumption**: Once used by [UniversalPaymentRouter](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/universalPaymentRouter.ts), the clearance code is marked `is_consumed: true`. Replay attempts fail immediately.
+- **One-Time Consumption**: Once used by [UniversalPaymentRouter](../src/payments/universalPaymentRouter.ts), the clearance code is marked `is_consumed: true`. Replay attempts fail immediately.
 
 ### 2.2 Layer 2: Human Corporate Officers (EIP-712 SPRS)
 - **Role**: Cryptographic sign-off for actions that are **"Outside the Rules"**:
@@ -66,7 +66,7 @@ BizArc divides financial authority into two strict cryptographic layers:
       uint256 deadline;
   }
   ```
-- **Cryptographic Recovery**: The [AuthorizationGate](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/security/authorizationGate.ts) recovers the signer using Viem `recoverTypedDataAddress` and cross-references the recovered public key against the corporate approver registry (`getAuthorizedAdminAddresses()`). Unauthorized signatures are rejected.
+- **Cryptographic Recovery**: The [AuthorizationGate](../src/security/authorizationGate.ts) recovers the signer using Viem `recoverTypedDataAddress` and cross-references the recovered public key against the corporate approver registry (`getAuthorizedAdminAddresses()`). Unauthorized signatures are rejected.
 
 ---
 
@@ -89,7 +89,7 @@ Tier A rules represent absolute boundaries. If violated, the action is **DENIED 
 2. **Payroll Wall Protection**: Accounts tagged with role `PAYROLL` can never be drawn for non-payroll vendor disbursements or cross-account loans.
 3. **Solvency Reserve Floors**: Operating accounts must preserve their minimum cash floor ($B_L \ge \text{Min Operating Floor}$). Sweeps that would deplete the floor are blocked.
 4. **Verified Counterparty Lock (Rule 3)**: Counterparty address or bank ID must exist in the Verified Master Registry.
-5. **Unbroken Ledger Hash Integrity (Rule 6)**: The sequential SHA-256 hash chain in [master_system_journal](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/masterJournalRepo.ts) must be 100% valid.
+5. **Unbroken Ledger Hash Integrity (Rule 6)**: The sequential SHA-256 hash chain in [master_system_journal](../src/database/repos/masterJournalRepo.ts) must be 100% valid.
 
 ### 3.2 Tier B: Human Declared Policies (Configurable Constraints)
 Tier B rules reflect commercial policies defined in tenant profiles:
@@ -106,16 +106,16 @@ Tier B rules reflect commercial policies defined in tenant profiles:
 In autonomous agent systems, a compromised or hallucinated agent could parse an invoice PDF, extract an attacker's cryptocurrency address printed on the invoice header, and disburse funds to the attacker.
 
 ### BizArc Defense Mechanism
-1. **Immutable Master Allowlist**: Counterparties must be pre-registered in [vendor_master_registry](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorMasterRepo.ts) with `change_lock: true`.
-2. **Zero Trust in Invoice Headers**: The [LiabilityRadarLlmAgent](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/agents/liabilityRadarLlmAgent.ts) extracts claimed invoice details, but the settlement address is resolved exclusively from the verified master record:
+1. **Immutable Master Allowlist**: Counterparties must be pre-registered in [vendor_master_registry](../src/database/repos/vendorMasterRepo.ts) with `change_lock: true`.
+2. **Zero Trust in Invoice Headers**: The [LiabilityRadarLlmAgent](../src/agents/liabilityRadarLlmAgent.ts) extracts claimed invoice details, but the settlement address is resolved exclusively from the verified master record:
    ```typescript
    if (vendorRecord.verified_payout_address.toLowerCase() !== input.claimedPayoutAddress.toLowerCase()) {
      initialStatus = "FROZEN";
      securityAlert = `PAYEE_SUBSTITUTION_ALERT: Claimed payout address does NOT match verified address.`;
    }
    ```
-3. **Dual Fiat Verification**: Fiat vendor bank accounts (IBANs, routing numbers, card tokens) must match pre-verified records in [VendorBankRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorBankRepo.ts).
-4. **Onchain Contract Whitelist**: In [DisbursalVault.sol](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/DisbursalVault.sol), disbursements check `require(approvedVendors[vendor], "Vendor not approved")`. Even if off-chain code were manipulated, unapproved addresses cannot receive funds onchain.
+3. **Dual Fiat Verification**: Fiat vendor bank accounts (IBANs, routing numbers, card tokens) must match pre-verified records in [VendorBankRepo](../src/database/repos/vendorBankRepo.ts).
+4. **Onchain Contract Whitelist**: In [DisbursalVault.sol](../contracts/DisbursalVault.sol), disbursements check `require(approvedVendors[vendor], "Vendor not approved")`. Even if off-chain code were manipulated, unapproved addresses cannot receive funds onchain.
 
 ---
 
@@ -125,7 +125,7 @@ Traditional accounting engines often apply silent floating-point rounding (e.g.,
 
 BizArc enforces **Loud Arithmetic**:
 - All financial balances are modeled using exact 6-decimal integer strings (`BigInt` raw units onchain).
-- Fractions exceeding 6 decimal places throw a [LoudRoundingError](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/foundation/index.ts).
+- Fractions exceeding 6 decimal places throw a [LoudRoundingError](../src/foundation/index.ts).
 - Silent rounding is strictly prohibited across all services.
 
 ---
@@ -146,23 +146,23 @@ graph TD
     ContractCheck -->|No| ExecuteOnchain[Execute Transfer & Mark Key = true]
 ```
 
-- **Router Gate**: [UniversalPaymentRouter](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/payments/universalPaymentRouter.ts) rejects duplicate executions before broadcasting to the network.
-- **Smart Contract Gate**: [DisbursalVault.sol](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/DisbursalVault.sol) maintains `mapping(bytes32 => bool) public executedIdempotencyKeys`. Any re-execution of an existing key reverts onchain.
+- **Router Gate**: [UniversalPaymentRouter](../src/payments/universalPaymentRouter.ts) rejects duplicate executions before broadcasting to the network.
+- **Smart Contract Gate**: [DisbursalVault.sol](../contracts/DisbursalVault.sol) maintains `mapping(bytes32 => bool) public executedIdempotencyKeys`. Any re-execution of an existing key reverts onchain.
 
 ---
 
 ## 7. Emergency Circuit Breakers & The 8 Production Pillars
 
-The [ProductionReadinessService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/productionReadinessService.ts) audits the health of the platform across **8 Core Pillars**:
+The [ProductionReadinessService](../src/services/productionReadinessService.ts) audits the health of the platform across **8 Core Pillars**:
 
 | Pillar | Verification Mandate | Threshold |
 | :--- | :--- | :--- |
-| **1. DisbursalVault Whitelist** | All registered vendors are whitelisted onchain in [DisbursalVault.sol](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/DisbursalVault.sol). | 100% whitelisted |
+| **1. DisbursalVault Whitelist** | All registered vendors are whitelisted onchain in [DisbursalVault.sol](../contracts/DisbursalVault.sol). | 100% whitelisted |
 | **2. Active Company Profile** | Organization profile is verified with active cost centers and tenant policies. | `ACTIVE` status |
 | **3. Latency Tiers** | Arc L1 RPC nodes and database queries respond within acceptable bounds. | $<2,000$ ms |
 | **4. Spending Caps** | Operating accounts have defined per-tx, daily, and weekly spending caps. | All caps defined |
 | **5. Address Checksums** | All configured wallet addresses conform to EIP-55 checksum standards. | 100% valid checksums |
-| **6. Vendor Master Immutability** | All suppliers in [VendorMasterRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorMasterRepo.ts) have `change_lock: true`. | 100% change locked |
+| **6. Vendor Master Immutability** | All suppliers in [VendorMasterRepo](../src/database/repos/vendorMasterRepo.ts) have `change_lock: true`. | 100% change locked |
 | **7. Solvency Invariant** | Effective balance matches sum of liquid cash and invested yield ($B_E = B_L + B_Y$). | Zero variance |
 | **8. Circuit Breakers** | Emergency stop mechanisms are armed and responsive. | Armed & active |
 
@@ -173,13 +173,13 @@ The tool `trigger_emergency_circuit_breaker` allows any cognitive agent or human
 
 ## 8. Verification and Reference Files
 
-- Problem & Governance Philosophy: [problem_and_solution_philosophy.md](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/problem_and_solution_philosophy.md)
-- Enterprise Onboarding Guide: [enterprise_onboarding_guide.md](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/enterprise_onboarding_guide.md)
-- Architecture Overview: [architecture_overview.md](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/docs/architecture_overview.md)
-- Authorization Gate: [authorizationGate.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/security/authorizationGate.ts)
-- Enforcer Compliance Agent: [policyComplianceLlmAgent.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/agents/policyComplianceLlmAgent.ts)
-- Clearance Codes Repository: [clearanceCodeRepo.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/clearanceCodeRepo.ts)
-- Permission Requests Repository: [permissionRequestRepo.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/permissionRequestRepo.ts)
-- Production Readiness Service: [productionReadinessService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/productionReadinessService.ts)
-- Disbursal Vault Contract: [DisbursalVault.sol](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/contracts/DisbursalVault.sol)
+- Problem & Governance Philosophy: [problem_and_solution_philosophy.md](./problem_and_solution_philosophy.md)
+- Enterprise Onboarding Guide: [enterprise_onboarding_guide.md](./enterprise_onboarding_guide.md)
+- Architecture Overview: [architecture_overview.md](./architecture_overview.md)
+- Authorization Gate: [authorizationGate.ts](../src/security/authorizationGate.ts)
+- Enforcer Compliance Agent: [policyComplianceLlmAgent.ts](../src/agents/policyComplianceLlmAgent.ts)
+- Clearance Codes Repository: [clearanceCodeRepo.ts](../src/database/repos/clearanceCodeRepo.ts)
+- Permission Requests Repository: [permissionRequestRepo.ts](../src/database/repos/permissionRequestRepo.ts)
+- Production Readiness Service: [productionReadinessService.ts](../src/services/productionReadinessService.ts)
+- Disbursal Vault Contract: [DisbursalVault.sol](../contracts/DisbursalVault.sol)
 

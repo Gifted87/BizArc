@@ -48,7 +48,7 @@ graph TD
 
 ## 3. Pathway A: The 6-Step Manual Interactive Wizard
 
-Managed by the [OnboardingWizardService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/onboardingWizardService.ts) and backed by the `wizard_onboarding_sessions` table in PostgreSQL.
+Managed by the [OnboardingWizardService](../src/services/onboardingWizardService.ts) and backed by the `wizard_onboarding_sessions` table in PostgreSQL.
 
 ### Step 1: Company Profile & Legal Identity
 Captures organizational fundamentals:
@@ -59,7 +59,7 @@ Captures organizational fundamentals:
 - **`businessDescription`**: Natural-language operational charter guiding cognitive agent context.
 
 ### Step 2: Mathematical Rules Defined via Q&A Engine
-Corporate finance officers should not write mathematical algorithms or YAML configurations. BizArc utilizes the [MathRulesQAEngine](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/mathRulesQAEngine.ts) to administer a structured questionnaire across four categories:
+Corporate finance officers should not write mathematical algorithms or YAML configurations. BizArc utilizes the [MathRulesQAEngine](../src/services/mathRulesQAEngine.ts) to administer a structured questionnaire across four categories:
 
 | Category | Example Question | Derived Mathematical Parameter | Purpose in System |
 | :--- | :--- | :--- | :--- |
@@ -104,7 +104,7 @@ Administrators input recurring obligations and attach them directly to finalized
    - If a liability references an undeclared account ID, validation rejects the payload immediately.
 2. **Obligation Definition**:
    - `title`: Obligation name (e.g., `AWS Cloud Infrastructure`, `OpenAI API Tier 5`, `G-Suite Enterprise`).
-   - `vendorId`: Unique counterparty code mapped to [VendorMasterRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorMasterRepo.ts).
+   - `vendorId`: Unique counterparty code mapped to [VendorMasterRepo](../src/database/repos/vendorMasterRepo.ts).
    - `amountUsdc`: Exact recurring amount (enforcing 6-decimal USDC precision).
    - `dueDate`: Scheduled payment date.
    - `frequencyCron`: Recurrence schedule (e.g., `0 0 1 * *` for monthly 1st).
@@ -169,18 +169,18 @@ sequenceDiagram
 ```
 
 ### 4.1 Integration Connectors
-1. **Google Workspace MCP Client** ([GoogleWorkspaceMcpClient](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/connectors/googleWorkspaceMcpClient.ts)):
+1. **Google Workspace MCP Client** ([GoogleWorkspaceMcpClient](../src/connectors/googleWorkspaceMcpClient.ts)):
    - Connects to Google Drive, Gmail, and Google Cloud Billing via MCP.
    - Extracts inbound supplier invoices, billing notices, and contract PDFs.
-2. **Microsoft 365 MCP Client** ([Microsoft365McpClient](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/connectors/microsoft365McpClient.ts)):
+2. **Microsoft 365 MCP Client** ([Microsoft365McpClient](../src/connectors/microsoft365McpClient.ts)):
    - Interfaces with Microsoft Graph API and Azure Billing.
    - Gathers enterprise vendor correspondence, receipts, and subscription renewals.
-3. **Odoo & ERPNext Direct Session Sync** ([SessionErpSyncService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/connectors/sessionErpSyncService.ts)):
+3. **Odoo & ERPNext Direct Session Sync** ([SessionErpSyncService](../src/connectors/sessionErpSyncService.ts)):
    - Authenticates using active enterprise user sessions.
    - Ingests structured purchase invoices (`account.move` in Odoo, `Purchase Invoice` in ERPNext), active supplier records (`res.partner`), and general ledger chart of accounts.
 
 ### 4.2 Autonomous Extraction to Editable Draft
-- The [IntakeDiscoveryAgent](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/services/intakeDiscoveryAgent.ts) parses discovered financial documents.
+- The [IntakeDiscoveryAgent](../src/services/intakeDiscoveryAgent.ts) parses discovered financial documents.
 - Normalizes supplier details, bank credentials (IBAN, routing, swift), crypto payout addresses, and recurring frequencies.
 - Calls `OnboardingWizardService.prefillDraftFromConnectedSource()`:
   - Generates candidate Step 4 operating accounts based on identified cost centers.

@@ -46,10 +46,22 @@ def compile_codebase_to_text(root_dir, output_file):
     # Configuration: Directory names to ignore (exact matches)
     ignored_dirs = {
         "_build",
+        "build",
+        "artifacts",
+        "cache",
+        "coverage",
+        "dist",
+        "docs",
+        "database",
+        "scripts",
         "native", 
         "deps", 
         "tmp",
+        "temp",
         "test",
+        "tests",
+        "typechain",
+        "typechain-types",
         "__pycache__",
         "node_modules",
         ".git",
@@ -57,8 +69,7 @@ def compile_codebase_to_text(root_dir, output_file):
         ".vscode",
         "venv311",
         "env",
-        "venv",
-        "dist"
+        "venv"
     }
 
     # Files to specifically ignore (exact matches)
@@ -66,7 +77,11 @@ def compile_codebase_to_text(root_dir, output_file):
         "compiled_codebase.txt", 
         "consolidator.py",
         "package-lock.json",
-        "yarn.lock"
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "bun.lockb",
+        "bun.lock",
+        "untitled.zip"
     }
 
     file_count = 0
@@ -98,7 +113,7 @@ def compile_codebase_to_text(root_dir, output_file):
                     # 2. Filter Files
                     # Skip hidden files, ignored names, and binaries
                     # -----------------------------------------------------
-                    if filename.startswith('.') or filename in ignored_filenames:
+                    if filename.startswith('.') or filename in ignored_filenames or ':Zone.Identifier' in filename:
                         continue
 
                     file_path = os.path.join(dirpath, filename)

@@ -65,17 +65,47 @@ export class ArcTransactionExecutor {
             idempotencyKey: request.idempotencyKey || `0x${Date.now().toString(16).padStart(64, "0")}`,
           });
 
-          return {
-            txHash: (circleResult.transactionId.startsWith("0x")
-              ? circleResult.transactionId
-              : `0x${circleResult.transactionId}`) as `0x${string}`,
-            status: "CONFIRMED",
-            idempotencyKey: request.idempotencyKey,
-            gasUsed: 21000n,
-          };
+          // Poll Circle transaction endpoint until confirmed onchain to retrieve real EVM transaction hash
+          let realTxHash: `0x${string}` | undefined;
+          let blockNumber: bigint | undefined;
+          for (let attempt = 0; attempt < 15; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const statusData = await this.circleWallet.getTransaction(circleResult.transactionId);
+            const state = statusData?.state;
+            if (state === "FAILED" || state === "DENIED" || state === "CANCELLED") {
+              throw new Error(`Circle transaction ${circleResult.transactionId} failed with state ${state}: ${statusData?.errorReason || "Execution reverted"}`);
+            }
+            if (statusData?.txHash) {
+              realTxHash = (statusData.txHash.startsWith("0x") ? statusData.txHash : `0x${statusData.txHash}`) as `0x${string}`;
+              if (statusData.blockHeight) blockNumber = BigInt(statusData.blockHeight);
+              break;
+            }
+            if (state === "CONFIRMED" || state === "COMPLETE") {
+              if (statusData?.txHash) {
+                realTxHash = (statusData.txHash.startsWith("0x") ? statusData.txHash : `0x${statusData.txHash}`) as `0x${string}`;
+              }
+              break;
+            }
+          }
+
+          if (realTxHash) {
+            return {
+              txHash: realTxHash,
+              status: "CONFIRMED",
+              idempotencyKey: request.idempotencyKey,
+              blockNumber,
+              gasUsed: 21000n,
+            };
+          }
+
+          throw new Error(`Circle transaction ${circleResult.transactionId} accepted but no EVM transaction hash confirmed within 15 seconds.`);
         }
-      } catch (circleErr) {
-        console.warn("[ArcTransactionExecutor] Circle wallet execution fell back to ViemWalletAdapter:", circleErr);
+      } catch (circleErr: any) {
+        if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+          console.warn("[ArcTransactionExecutor] Circle wallet execution fell back to ViemWalletAdapter in test mode:", circleErr.message);
+        } else {
+          throw new Error(`[ArcTransactionExecutor] Circle Developer-Controlled Wallet execution failed: ${circleErr.message}`);
+        }
       }
     }
 

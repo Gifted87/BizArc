@@ -15,3 +15,6 @@ export * from "./fiatFundingService.js";
 export * from "./liabilitySettingsService.js";
 export * from "./manualDisbursalService.js";
 export * from "./accountFundingService.js";
+export * from "./vendorLifecycleService.js";
+export * from "./recurringLiabilityService.js";
+export * from "./yieldOptimizerService.js";

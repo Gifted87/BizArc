@@ -106,9 +106,11 @@ export class LedgerWitnessService {
       });
     } catch (err: any) {
       if (
-        txHash.startsWith("0x0000") &&
-        (process.env.BIZARC_ALLOW_SIMULATED_RECEIPTS === "true" || process.env.NODE_ENV === "test" || !process.env.CI)
+        process.env.NODE_ENV === "test" &&
+        process.env.ENABLE_MOCKS === "true" &&
+        txHash.startsWith("0x0000")
       ) {
+        console.warn(`[LedgerWitnessService] LOUD WARNING: SIMULATING BLOCKCHAIN RECEIPT for ${txHash}`);
         return {
           txHash,
           blockNumber: 1234567n,

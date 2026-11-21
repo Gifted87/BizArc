@@ -14,7 +14,7 @@ Engineered according to the **Canteen Agents & Ledgers (2026)** specification, t
 
 ## 2. Relational Schema Architecture (PostgreSQL)
 
-The database schema is defined in [database/schema.sql](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/database/schema.sql) and implemented via 22 dedicated repositories in [src/database/repos/](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos):
+The database schema is defined in [database/schema.sql](../database/schema.sql) and implemented via 22 dedicated repositories in [src/database/repos/](../src/database/repos):
 
 ```mermaid
 erDiagram
@@ -41,30 +41,30 @@ erDiagram
 
 | Table Name | Primary Repository | Purpose | Key Indices |
 | :--- | :--- | :--- | :--- |
-| `treasury_accounts` | [TreasuryAccountsRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/treasuryAccountsRepo.ts) | Operating wallets, cost-center roles, reserve floors, spending caps | `account_id`, `wallet_address`, `company_id` |
-| `account_liabilities` | [LiabilityRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/liabilityRepo.ts) | Dynamic Record 1: Scheduled vendor liabilities, multi-modal payment configs | `liability_id`, `due_date`, `status`, `account_id` |
-| `vendor_master_registry` | [VendorMasterRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorMasterRepo.ts) | Verified payee registry with immutable `change_lock` (Rule 3) | `vendor_id`, `verified_payout_address` |
-| `vendor_bank_accounts` | [VendorBankRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorBankRepo.ts) | Traditional banking coordinates (IBANs, routing numbers, card tokens) | `bank_account_id`, `vendor_id`, `payment_sub_method` |
-| `vendor_payment_preferences` | [VendorPaymentPreferenceRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/vendorPaymentPreferenceRepo.ts) | Multi-modal payment rail preferences (Rails 1–5) and routing metadata | `preference_id`, `vendor_id`, `preferred_rail` |
-| `permission_requests` | [PermissionRequestRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/permissionRequestRepo.ts) | EIP-712 Standardized Permission Requests (SPRS) awaiting human CFO sign-off | `request_id`, `status` |
-| `master_system_journal` | [MasterJournalRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/masterJournalRepo.ts) | Double-entry journal with sequential SHA-256 hash chaining (Rule 1 & 6) | `sequence_id`, `account_id`, `document_ref` |
-| `account_agent_audit_log` | [AuditLogRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/auditLogRepo.ts) | Dynamic Record 3: Pre- and post-state snapshots per actor agent | `log_id`, `account_id`, `timestamp`, `action_type` |
-| `dynamic_safe_to_invest` | [DynamicRecordsService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/records/dynamicRecordsService.ts) | Dynamic Record 2: Safe-to-invest metrics, tripartite balance records | `record_id`, `account_id`, `created_at` |
-| `compliance_clearance_codes`| [ClearanceCodeRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/clearanceCodeRepo.ts) | Single-use time-bound authorization tokens issued by Enforcer Agent #104 | `code`, `account_id`, `is_consumed`, `expires_at` |
-| `movement_policies` | [MovementPolicyRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/movementPolicyRepo.ts) | Inter-account waterfall priority, borrowing ratios, protected accounts | `policy_id`, `company_id` |
-| `fiat_payout_records` | [FiatPayoutRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/fiatPayoutRepo.ts) | Traditional banking payout tracking (Fedwire, ACH, Push-to-Card, SEPA, SWIFT) | `payout_id`, `account_id`, `vendor_id`, `status` |
-| `fiat_deposit_sessions` | [FiatDepositSessionRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/fiatDepositSessionRepo.ts) | Onramp and institutional wire funding sessions with tracking memos | `session_id`, `account_id`, `tracking_memo` |
-| `token_swap_records` | [TokenSwapRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/tokenSwapRepo.ts) | Multi-chain token swap records (LiFi / Swap Kit / Arc settlement) | `swap_id`, `account_id` |
-| `session_key_registry` | [SessionKeyRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/sessionKeyRepo.ts) | Scoped ERC-4337 / ERC-6900 session keys with spending cycles | `session_key_id`, `account_id`, `allowed_recipient` |
-| `erc3009_authorizations` | [Erc3009Repo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/erc3009Repo.ts) | Signed EIP-3009 authorizations and nonces preventing replay attacks | `nonce`, `from_address`, `to_address` |
-| `erp_sync_state` | [ErpSyncRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/erpSyncRepo.ts) | Document checkpoints and synchronization status for Odoo & ERPNext | `sync_id`, `system_type`, `entity_type` |
-| `enterprise_vector_memory` | [VectorMemoryService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/memory/vectorMemoryService.ts) | 1536-dimensional pgvector store for semantic retrieval of contracts and bylaws | `id`, `collection`, `document_id`, HNSW index |
+| `treasury_accounts` | [TreasuryAccountsRepo](../src/database/repos/treasuryAccountsRepo.ts) | Operating wallets, cost-center roles, reserve floors, spending caps | `account_id`, `wallet_address`, `company_id` |
+| `account_liabilities` | [LiabilityRepo](../src/database/repos/liabilityRepo.ts) | Dynamic Record 1: Scheduled vendor liabilities, multi-modal payment configs | `liability_id`, `due_date`, `status`, `account_id` |
+| `vendor_master_registry` | [VendorMasterRepo](../src/database/repos/vendorMasterRepo.ts) | Verified payee registry with immutable `change_lock` (Rule 3) | `vendor_id`, `verified_payout_address` |
+| `vendor_bank_accounts` | [VendorBankRepo](../src/database/repos/vendorBankRepo.ts) | Traditional banking coordinates (IBANs, routing numbers, card tokens) | `bank_account_id`, `vendor_id`, `payment_sub_method` |
+| `vendor_payment_preferences` | [VendorPaymentPreferenceRepo](../src/database/repos/vendorPaymentPreferenceRepo.ts) | Multi-modal payment rail preferences (Rails 1–5) and routing metadata | `preference_id`, `vendor_id`, `preferred_rail` |
+| `permission_requests` | [PermissionRequestRepo](../src/database/repos/permissionRequestRepo.ts) | EIP-712 Standardized Permission Requests (SPRS) awaiting human CFO sign-off | `request_id`, `status` |
+| `master_system_journal` | [MasterJournalRepo](../src/database/repos/masterJournalRepo.ts) | Double-entry journal with sequential SHA-256 hash chaining (Rule 1 & 6) | `sequence_id`, `account_id`, `document_ref` |
+| `account_agent_audit_log` | [AuditLogRepo](../src/database/repos/auditLogRepo.ts) | Dynamic Record 3: Pre- and post-state snapshots per actor agent | `log_id`, `account_id`, `timestamp`, `action_type` |
+| `dynamic_safe_to_invest` | [DynamicRecordsService](../src/records/dynamicRecordsService.ts) | Dynamic Record 2: Safe-to-invest metrics, tripartite balance records | `record_id`, `account_id`, `created_at` |
+| `compliance_clearance_codes`| [ClearanceCodeRepo](../src/database/repos/clearanceCodeRepo.ts) | Single-use time-bound authorization tokens issued by Enforcer Agent #104 | `code`, `account_id`, `is_consumed`, `expires_at` |
+| `movement_policies` | [MovementPolicyRepo](../src/database/repos/movementPolicyRepo.ts) | Inter-account waterfall priority, borrowing ratios, protected accounts | `policy_id`, `company_id` |
+| `fiat_payout_records` | [FiatPayoutRepo](../src/database/repos/fiatPayoutRepo.ts) | Traditional banking payout tracking (Fedwire, ACH, Push-to-Card, SEPA, SWIFT) | `payout_id`, `account_id`, `vendor_id`, `status` |
+| `fiat_deposit_sessions` | [FiatDepositSessionRepo](../src/database/repos/fiatDepositSessionRepo.ts) | Onramp and institutional wire funding sessions with tracking memos | `session_id`, `account_id`, `tracking_memo` |
+| `token_swap_records` | [TokenSwapRepo](../src/database/repos/tokenSwapRepo.ts) | Multi-chain token swap records (LiFi / Swap Kit / Arc settlement) | `swap_id`, `account_id` |
+| `session_key_registry` | [SessionKeyRepo](../src/database/repos/sessionKeyRepo.ts) | Scoped ERC-4337 / ERC-6900 session keys with spending cycles | `session_key_id`, `account_id`, `allowed_recipient` |
+| `erc3009_authorizations` | [Erc3009Repo](../src/database/repos/erc3009Repo.ts) | Signed EIP-3009 authorizations and nonces preventing replay attacks | `nonce`, `from_address`, `to_address` |
+| `erp_sync_state` | [ErpSyncRepo](../src/database/repos/erpSyncRepo.ts) | Document checkpoints and synchronization status for Odoo & ERPNext | `sync_id`, `system_type`, `entity_type` |
+| `enterprise_vector_memory` | [VectorMemoryService](../src/memory/vectorMemoryService.ts) | 1536-dimensional pgvector store for semantic retrieval of contracts and bylaws | `id`, `collection`, `document_id`, HNSW index |
 
 ---
 
 ## 3. Master System Journal & SHA-256 Hash Chaining
 
-The [MasterJournalRepo](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/masterJournalRepo.ts) implements **Golden Rule 1 & Rule 6**: an immutable, double-entry general ledger protected by a cryptographic hash chain.
+The [MasterJournalRepo](../src/database/repos/masterJournalRepo.ts) implements **Golden Rule 1 & Rule 6**: an immutable, double-entry general ledger protected by a cryptographic hash chain.
 
 ### 3.1 Hash Chaining Mathematical Formulation
 
@@ -117,7 +117,7 @@ The ledger integrity is verified programmatically via `MasterJournalRepo.verifyC
 
 ## 4. The Three Dynamic Records
 
-The system maintains three parallel real-time dynamic records in [DynamicRecordsService](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/records/dynamicRecordsService.ts):
+The system maintains three parallel real-time dynamic records in [DynamicRecordsService](../src/records/dynamicRecordsService.ts):
 
 ### Dynamic Record 1: Active Liabilities Table
 - **Scope**: All upcoming vendor obligations, subscription renewals, payroll cycles, and debt service demands.
@@ -168,9 +168,9 @@ USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
 ## 6. Verification and Reference Files
 
-- Database Schema: [database/schema.sql](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/database/schema.sql)
-- Database Migration Script: [src/database/migrate.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/migrate.ts)
-- Master Journal Repo: [masterJournalRepo.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos/masterJournalRepo.ts)
-- Dynamic Records Service: [dynamicRecordsService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/records/dynamicRecordsService.ts)
-- Vector Memory Service: [vectorMemoryService.ts](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/memory/vectorMemoryService.ts)
-- Database Repositories: [src/database/repos/](file://wsl.localhost/Ubuntu-24.04/home/gifted/BizArc/src/database/repos)
+- Database Schema: [database/schema.sql](../database/schema.sql)
+- Database Migration Script: [src/database/migrate.ts](../src/database/migrate.ts)
+- Master Journal Repo: [masterJournalRepo.ts](../src/database/repos/masterJournalRepo.ts)
+- Dynamic Records Service: [dynamicRecordsService.ts](../src/records/dynamicRecordsService.ts)
+- Vector Memory Service: [vectorMemoryService.ts](../src/memory/vectorMemoryService.ts)
+- Database Repositories: [src/database/repos/](../src/database/repos)

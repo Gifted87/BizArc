@@ -418,6 +418,11 @@ export class EnterpriseOnboardingService {
         is_active: true,
       });
       createdAccounts.push(record);
+
+      if (params.adminWallet) {
+        this.registrationService.setAdminWalletAdapter(params.adminWallet);
+        await this.registrationService.registerAccountOnchain(accPolicy.account_id, walletAddress).catch(() => {});
+      }
     }
 
     const registeredVendors: VendorMasterRecord[] = [];

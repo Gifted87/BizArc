@@ -268,14 +268,9 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
       if (lastToolName === "recalculate_safe_to_invest") {
         const safeToInvestUsdc = parsedResult.data?.safeToInvestUsdc ?? 0;
         if (safeToInvestUsdc > 0 && tools?.some((t) => t.function.name === "sweep_excess_liquidity")) {
-          const issuedClearance = await ClearanceCodeRepo.issueCode({
-            accountId,
-            actionType: "AUTONOMOUS_SWEEP",
-            amountUsdc: safeToInvestUsdc.toFixed(6),
-            ttlSeconds: 3600,
-          });
+          // Do not bypass PolicyComplianceAgent by unilaterally issuing clearance codes
           return {
-            content: `Safe-to-Invest indicates surplus capital of ${safeToInvestUsdc} USDC. Executing autonomous sweep into USYC on Arc L1.`,
+            content: `Safe-to-Invest indicates surplus capital of ${safeToInvestUsdc} USDC. Proposing autonomous sweep into USYC on Arc L1.`,
             tool_calls: [
               {
                 id: `call_${Date.now()}_sweep`,
@@ -285,7 +280,7 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
                   arguments: JSON.stringify({
                     accountId,
                     amountUsdc: safeToInvestUsdc.toFixed(6),
-                    clearanceCode: issuedClearance.code,
+                    clearanceCode: "",
                   }),
                 },
               },
@@ -545,12 +540,7 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
       content.includes("sweep")
     ) {
       const sweepAmt = payloadObj?.customAmount || amountUsdc || "10.000000";
-      const sweepCode = payloadObj?.clearanceCode || (await ClearanceCodeRepo.issueCode({
-        accountId,
-        actionType: "AUTONOMOUS_SWEEP",
-        amountUsdc: sweepAmt,
-        ttlSeconds: 3600,
-      })).code;
+      const sweepCode = payloadObj?.clearanceCode || "";
       return {
         content: `Executing autonomous sweep of ${amountUsdc} USDC into USYC Yield Vault for account ${accountId}.`,
         tool_calls: [
@@ -854,10 +844,17 @@ export class DeterministicSimulatedLlmEngine implements ILlmEngine {
  * Model-Agnostic LLM Engine Factory
  */
 export function createLlmEngine(config?: Partial<LlmEngineConfig>): ILlmEngine {
+  const detectedKey =
+    config?.apiKey ||
+    process.env.OPENROUTER_API_KEY ||
+    process.env.LLM_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.OPENAI_API_KEY;
+
   const provider =
     config?.provider ||
     process.env.LLM_PROVIDER ||
-    (process.env.OPENAI_API_KEY ? "openai" : "simulation");
+    (detectedKey ? "openai" : "simulation");
 
   if (provider === "simulation") {
     return new DeterministicSimulatedLlmEngine();
@@ -865,7 +862,7 @@ export function createLlmEngine(config?: Partial<LlmEngineConfig>): ILlmEngine {
 
   return new UniversalOpenAiCompatibleEngine({
     provider: provider as any,
-    apiKey: config?.apiKey || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY,
+    apiKey: detectedKey,
     baseUrl: config?.baseUrl || process.env.LLM_BASE_URL,
     model: config?.model || process.env.LLM_MODEL,
     embeddingModel: config?.embeddingModel || process.env.LLM_EMBEDDING_MODEL,

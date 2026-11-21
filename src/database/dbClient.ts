@@ -1,9 +1,11 @@
 import pg from "pg";
 import dotenv from "dotenv";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 dotenv.config();
 
 const { Pool } = pg;
+const transactionStorage = new AsyncLocalStorage<pg.PoolClient>();
 
 export class DbClient {
   private static pool: pg.Pool | null = null;
@@ -32,6 +34,10 @@ export class DbClient {
     text: string,
     params?: any[]
   ): Promise<pg.QueryResult<R>> {
+    const activeClient = transactionStorage.getStore();
+    if (activeClient) {
+      return activeClient.query<R>(text, params);
+    }
     const pool = DbClient.getPool();
     return pool.query<R>(text, params);
   }
@@ -43,7 +49,7 @@ export class DbClient {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const result = await fn(client);
+      const result = await transactionStorage.run(client, () => fn(client));
       await client.query("COMMIT");
       return result;
     } catch (error) {

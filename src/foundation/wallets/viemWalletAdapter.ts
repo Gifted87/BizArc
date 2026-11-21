@@ -77,12 +77,10 @@ export class ViemWalletAdapter {
         gasUsed: receipt.gasUsed,
       };
     } catch (err: any) {
-      if (
-        request.targetContract?.toLowerCase() === "0x4444444444444444444444444444444444444444" ||
-        request.targetContract?.toLowerCase() === "0x5555555555555555555555555555555555555555" ||
-        err.message?.includes("gas required exceeds allowance") ||
-        err.message?.includes("execution reverted")
-      ) {
+      if (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true") {
+        console.warn(
+          `[ViemWalletAdapter] LOUD WARNING: SIMULATING ON-CHAIN EXECUTION for ${request.functionName} on ${request.targetContract}. Cause: ${err.message}`
+        );
         const simulatedHash = `0x${Date.now().toString(16).padStart(64, "0")}` as `0x${string}`;
         return {
           txHash: simulatedHash,
@@ -92,7 +90,7 @@ export class ViemWalletAdapter {
           gasUsed: 21000n,
         };
       }
-      throw err;
+      throw new Error(`[ViemWalletAdapter] Transaction failed for ${request.functionName} on ${request.targetContract}: ${err.message}`);
     }
   }
 

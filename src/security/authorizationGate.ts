@@ -166,10 +166,10 @@ export class AuthorizationGate {
     const pk = params.privateKey ||
       (process.env.ADMIN_PRIVATE_KEY as `0x${string}`) ||
       (process.env.TEST_ADMIN_PRIVATE_KEY as `0x${string}`) ||
-      (process.env.NODE_ENV !== "production" ? DEFAULT_ADMIN_PRIVATE_KEY : undefined);
+      (process.env.NODE_ENV === "test" && process.env.ENABLE_MOCKS === "true" ? DEFAULT_ADMIN_PRIVATE_KEY : undefined);
 
     if (!pk) {
-      throw new Error("PRODUCTION_SECURITY_ERROR: No authorized admin private key configured for signing.");
+      throw new Error("SECURITY_ERROR: No authorized admin private key provided or configured for signing.");
     }
 
     const account = privateKeyToAccount(pk);

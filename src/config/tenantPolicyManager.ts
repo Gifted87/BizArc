@@ -11,6 +11,7 @@ import { MovementPolicyRepo } from "../database/repos/movementPolicyRepo.js";
 import { MathRulesQaRepo, MathRuleQaResponseRecord } from "../database/repos/mathRulesQaRepo.js";
 import { CompanyProfileRepo } from "../database/repos/companyProfileRepo.js";
 import { PolicyLoader } from "./policyLoader.js";
+import { resolveParameterValue } from "./mathRulesMapping.js";
 
 export interface CacheEntry {
   profile: PolicyProfile;
@@ -253,12 +254,12 @@ export class TenantPolicyManager implements ITenantPolicyManager {
     // 5. Derive Dynamic Investment Rules
     const investmentRules: InvestmentRulesPolicy = {
       target_vault: "0x4444444444444444444444444444444444444444", // USYC Tokenized Vault
-      max_company_allocation_ratio: qaMap.get("usycYieldSweepRatio") ?? 0.85,
-      min_sweep_amount_usdc: qaMap.get("minSweepBatchUsdc") ?? 10.0,
+      max_company_allocation_ratio: resolveParameterValue(qaMap, "usycYieldSweepRatio", 0.85),
+      min_sweep_amount_usdc: resolveParameterValue(qaMap, "minSweepBatchUsdc", 10.0),
       auto_sweep_enabled: true,
       auto_recall_enabled: true,
-      invest_hysteresis_band_usdc: qaMap.get("investHysteresisBandUsdc") ?? 50.0,
-      recall_hysteresis_band_usdc: qaMap.get("recallHysteresisBandUsdc") ?? 50.0,
+      invest_hysteresis_band_usdc: resolveParameterValue(qaMap, "investHysteresisBandUsdc", 50.0),
+      recall_hysteresis_band_usdc: resolveParameterValue(qaMap, "recallHysteresisBandUsdc", 50.0),
       debounce_window_ms: 5000,
       min_action_cooldown_seconds: 300,
       tag_internal_settlement_events: true,
@@ -268,12 +269,13 @@ export class TenantPolicyManager implements ITenantPolicyManager {
 
     // 6. Derive Dynamic Spending Limits
     const spendingLimits: SpendingLimitsPolicy = {
-      daily_hard_cap_usdc: qaMap.get("dailyHardCapUsdc") ?? 5000.0,
-      single_tx_human_gate_threshold_usdc: qaMap.get("singleTxHumanGateThresholdUsdc") ?? 1000.0,
+      daily_hard_cap_usdc: resolveParameterValue(qaMap, "dailyHardCapUsdc", 5000.0),
+      single_tx_human_gate_threshold_usdc: resolveParameterValue(qaMap, "singleTxHumanGateThresholdUsdc", 1000.0),
     };
 
     // 7. Compile Declared Policies
-    const stealthTolerance = qaMap.get("stealthPriceCreepTolerancePct") ?? 5.0;
+    const stealthTolerance = resolveParameterValue(qaMap, "stealthPriceCreepTolerancePct", 5.0);
+    const taxHoldback = resolveParameterValue(qaMap, "taxHoldbackPercentage", 15.0);
     const declaredPolicies = {
       cost_center_rules: [
         "Accounts must match active operating cost center hierarchy",
@@ -284,7 +286,7 @@ export class TenantPolicyManager implements ITenantPolicyManager {
         flag_unregistered_vendors: true,
         require_three_way_match: true,
       },
-      tax_holdback_percentage: qaMap.get("taxHoldbackPercentage") ?? 15.0,
+      tax_holdback_percentage: taxHoldback,
     };
 
     return {
