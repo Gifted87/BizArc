@@ -1,4 +1,8 @@
 node_modules/
 dist/
+build/
+*.zip
 .env
+.DS_Store
 *.log
+mnesia/
